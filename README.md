@@ -27,9 +27,9 @@ ProxyRanger was built to solve real-world routing challenges:
 
 1. User(or clash/singbox/etc..) sends an HTTP/HTTPS request to ProxyRanger
 2. ProxyRanger tests the requested site(SNI) through multiple upstream proxies using GET and HEAD requests
-3. The first upstream that responds correctly for the second-level domain is selected  
-4. The working upstream is cached for future requests  
-5. User overrides can be applied for domains that require special routing  
+3. The first upstream that responds correctly for the second-level domain is selected
+4. The working upstream is cached for future requests
+5. User overrides can be applied for domains that require special routing
 
 ---
 
@@ -91,6 +91,9 @@ If you need to test sites with self-signed or custom CA certificates, place them
 ProxyRanger will use these certificates for domain accessibility checks.
 
 ### 6. Build and run via Docker Compose
+
+Edit the Dockerfile and adjust the GOARCH environment variable. Most users will use `amd64`. On ARM devices like OrangePi, set it to `arm64`.
+
 ```
 docker compose up --build -d
 ```
@@ -108,7 +111,7 @@ docker compose logs -f proxyranger
 ### 7. Verify operation
 
 - Send HTTP requests through ProxyRanger to any domain.
-- The proxy will automatically select the first working upstream and cache the result. The cache is saved to a file every 5 minutes. 
+- The proxy will automatically select the first working upstream and cache the result. The cache is saved to a file every 5 minutes.
 - To reset the cache, delete ./cache/cache.json and restart the container.
 
 ## Current limitations
@@ -121,4 +124,4 @@ docker compose logs -f proxyranger
 
 - Automatic re-check of cached upstreams on failure
 - Configurable listening port and interfaces
-  
+
