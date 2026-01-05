@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  proxy:
+    build: .
+    container_name: proxyranger
+    restart: always
+    network_mode: host
+    mem_limit: 80M
+    logging:
+      driver: "journald"
+      options:
+        tag: "{{.Name}}"
+    volumes:
+      - ./cache:/app/cache
+      - ./certs:/app/certs
+      - ./proxies.txt:/app/proxies.txt
