@@ -157,7 +157,7 @@ func makeRequest(client *http.Client, req *http.Request, proxyURL, target, metho
 
 	resp, err := client.Do(req)
 	if err != nil {
-		if !errors.Is(err, context.Canceled) || !errors.Is(err, context.DeadlineExceeded) {
+		if !(errors.Is(err, context.Canceled) || !errors.Is(err, context.DeadlineExceeded)) {
 			log.Printf("%s Proxy %s failed to reach %s: %v", method, proxyURL, target, err)
 		}
 		return false, 0
