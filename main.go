@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
@@ -33,7 +34,7 @@ var (
 
 const (
 	minBodyLength      = 1000
-	checkRetryAttempts = 10
+	checkRetryAttempts = 15
 	chromeUA           = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 )
 
@@ -156,7 +157,9 @@ func makeRequest(client *http.Client, req *http.Request, proxyURL, target, metho
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("%s Proxy %s failed to reach %s: %v", method, proxyURL, target, err)
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("%s Proxy %s failed to reach %s: %v", method, proxyURL, target, err)
+		}
 		return false, 0
 	}
 	defer resp.Body.Close()
