@@ -291,15 +291,15 @@ func findWorkingProxy(domain string) (string, bool) {
 	}
 
 	// Проверяем апстримы для поддомена
-	for _, proxy := range proxies {
-		if ok, _ := checkProxy(proxy, domain, "HEAD"); ok {
-			cacheMu.Lock()
-			cache[mainDom] = proxy
-			cacheMu.Unlock()
-			log.Printf("Updated proxy %s for domain %s based on working subdomain %s via HEAD", proxy, mainDom, domain)
-			return proxy, true
-		}
-	}
+	// for _, proxy := range proxies {
+	// 	if ok, _ := checkProxy(proxy, domain, "HEAD"); ok {
+	// 		cacheMu.Lock()
+	// 		cache[mainDom] = proxy
+	// 		cacheMu.Unlock()
+	// 		log.Printf("Updated proxy %s for domain %s based on working subdomain %s via HEAD", proxy, mainDom, domain)
+	// 		return proxy, true
+	// 	}
+	// }
 
 	// Если все HEAD провалились - пробуем GET
 	codes := make([]int, len(proxies))
@@ -367,15 +367,15 @@ func checkMainDomain(mainDom string) {
 		lastProxy = proxies[len(proxies)-1]
 	}
 	// Проверяем основной домен
-	for _, proxy := range proxies {
-		if ok, _ := checkProxy(proxy, mainDom, "HEAD"); ok {
-			cacheMu.Lock()
-			cache[mainDom] = proxy
-			cacheMu.Unlock()
-			log.Printf("Selected proxy %s for domain %s and all its subdomains via HEAD", proxy, mainDom)
-			return
-		}
-	}
+	// for _, proxy := range proxies {
+	// 	if ok, _ := checkProxy(proxy, mainDom, "HEAD"); ok {
+	// 		cacheMu.Lock()
+	// 		cache[mainDom] = proxy
+	// 		cacheMu.Unlock()
+	// 		log.Printf("Selected proxy %s for domain %s and all its subdomains via HEAD", proxy, mainDom)
+	// 		return
+	// 	}
+	// }
 	codes := make([]int, len(proxies))
 
 	// 2. Если все HEAD провалились - пробуем GET
