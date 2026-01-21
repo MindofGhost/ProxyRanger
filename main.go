@@ -39,7 +39,7 @@ const (
 
 type StatusError int
 
-func (e StatusError) Error() string
+func (e StatusError) Error() string { return "" }
 
 // LoadCertPoolFromDir load custom certs from ./certs
 func loadCerts(dir string) *x509.CertPool {
