@@ -183,15 +183,15 @@ func checkProxy(proxyURL string, target string, method string) (ok bool, status 
 			DialContext: (&net.Dialer{
 				Timeout: 1 * time.Second,
 			}).DialContext,
-			TLSHandshakeTimeout:   1500 * time.Millisecond,
-			ResponseHeaderTimeout: 1 * time.Second,
+			TLSHandshakeTimeout:   1800 * time.Millisecond,
+			ResponseHeaderTimeout: 2500 * time.Millisecond,
 			ExpectContinueTimeout: 500 * time.Millisecond,
 			DisableCompression:    true,
 			TLSClientConfig: &tls.Config{
 				RootCAs: certPool,
 			},
 		},
-		Timeout: 2500 * time.Millisecond,
+		Timeout: 3000 * time.Millisecond,
 	}
 
 	req, err := http.NewRequest(method, "https://"+target, nil)
