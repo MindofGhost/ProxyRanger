@@ -2,9 +2,12 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net"
@@ -29,7 +32,15 @@ var (
 	certPath      = "certs"
 )
 
-const chromeUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+const (
+	minBodyLength      = 1000
+	checkRetryAttempts = 10
+	chromeUA           = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+)
+
+type StatusError int
+
+func (e StatusError) Error() string { return "" }
 
 // LoadCertPoolFromDir load custom certs from ./certs
 func loadCerts(dir string) *x509.CertPool {
@@ -37,7 +48,6 @@ func loadCerts(dir string) *x509.CertPool {
 	if err != nil || pool == nil {
 		pool = x509.NewCertPool()
 	}
-
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -143,6 +153,36 @@ func loadCache() {
 
 }
 
+func makeRequest(client *http.Client, req *http.Request, proxyURL, target, method string) (ok bool, status int) {
+
+	resp, err := client.Do(req)
+	if err != nil {
+		if !(errors.Is(err, context.Canceled) || !errors.Is(err, context.DeadlineExceeded)) {
+			log.Printf("%s Proxy %s failed to reach %s: %v", method, proxyURL, target, err)
+		}
+		return false, 0
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 && resp.StatusCode != 404 {
+		log.Printf("%s Proxy %s returned bad status %d for %s", method, proxyURL, resp.StatusCode, target)
+		return false, resp.StatusCode
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("%s Proxy %s read body failed: %v for %s", method, proxyURL, err, target)
+		return false, 0
+	}
+
+	if method != "HEAD" && resp.ContentLength > 0 && int64(len(body)) != resp.ContentLength {
+		log.Printf("%s Proxy %s returned only %d bytes instead of %d for %s. Bad proxy or DPI detected", method, proxyURL, int64(len(body)), resp.ContentLength, target)
+		return false, 0
+	}
+
+	return true, resp.StatusCode
+}
+
 // Проверка доступности прокси через target
 func checkProxy(proxyURL string, target string, method string) (ok bool, status int) {
 	proxy, err := url.Parse(proxyURL)
@@ -153,32 +193,58 @@ func checkProxy(proxyURL string, target string, method string) (ok bool, status 
 	client := &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(proxy),
+			DialContext: (&net.Dialer{
+				Timeout: 1 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   1800 * time.Millisecond,
+			ResponseHeaderTimeout: 2500 * time.Millisecond,
+			ExpectContinueTimeout: 500 * time.Millisecond,
+			DisableCompression:    true,
 			TLSClientConfig: &tls.Config{
 				RootCAs: certPool,
 			},
 		},
-		Timeout: 3 * time.Second,
+		Timeout: 3000 * time.Millisecond,
 	}
 
-	req, err := http.NewRequest(method, "https://"+target, nil)
+	baseReq, err := http.NewRequest(method, "https://"+target, nil)
 	if err != nil {
 		return false, 0
 	}
-	req.Header.Set("User-Agent", chromeUA)
+	baseReq.Header.Set("User-Agent", chromeUA)
 
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("%s Proxy %s failed to reach %s: %v", method, proxyURL, target, err)
+	okCh := make(chan int, 1)
+
+	g, ctx := errgroup.WithContext(context.Background())
+
+	for attempt := 1; attempt <= checkRetryAttempts; attempt++ {
+		g.Go(func() error {
+			req := baseReq.Clone(ctx)
+
+			ok, status := makeRequest(client, req, proxyURL, target, method)
+
+			if !ok {
+				return StatusError(status)
+			}
+
+			select {
+			case okCh <- status:
+			default:
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+
+		if se, ok := err.(StatusError); ok {
+			return false, int(se)
+		}
 		return false, 0
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 && resp.StatusCode != 404 {
-		log.Printf("%s Proxy %s returned bad status %d for %s", method, proxyURL, resp.StatusCode, target)
-		return false, resp.StatusCode
-	}
-
-	return true, resp.StatusCode
+	status = <-okCh
+	return true, status
 }
 
 // Получаем основной домен из хоста (например, sub.example.com -> example.com)
@@ -225,15 +291,15 @@ func findWorkingProxy(domain string) (string, bool) {
 	}
 
 	// Проверяем апстримы для поддомена
-	for _, proxy := range proxies {
-		if ok, _ := checkProxy(proxy, domain, "HEAD"); ok {
-			cacheMu.Lock()
-			cache[mainDom] = proxy
-			cacheMu.Unlock()
-			log.Printf("Updated proxy %s for domain %s based on working subdomain %s via HEAD", proxy, mainDom, domain)
-			return proxy, true
-		}
-	}
+	// for _, proxy := range proxies {
+	// 	if ok, _ := checkProxy(proxy, domain, "HEAD"); ok {
+	// 		cacheMu.Lock()
+	// 		cache[mainDom] = proxy
+	// 		cacheMu.Unlock()
+	// 		log.Printf("Updated proxy %s for domain %s based on working subdomain %s via HEAD", proxy, mainDom, domain)
+	// 		return proxy, true
+	// 	}
+	// }
 
 	// Если все HEAD провалились - пробуем GET
 	codes := make([]int, len(proxies))
@@ -301,15 +367,15 @@ func checkMainDomain(mainDom string) {
 		lastProxy = proxies[len(proxies)-1]
 	}
 	// Проверяем основной домен
-	for _, proxy := range proxies {
-		if ok, _ := checkProxy(proxy, mainDom, "HEAD"); ok {
-			cacheMu.Lock()
-			cache[mainDom] = proxy
-			cacheMu.Unlock()
-			log.Printf("Selected proxy %s for domain %s and all its subdomains via HEAD", proxy, mainDom)
-			return
-		}
-	}
+	// for _, proxy := range proxies {
+	// 	if ok, _ := checkProxy(proxy, mainDom, "HEAD"); ok {
+	// 		cacheMu.Lock()
+	// 		cache[mainDom] = proxy
+	// 		cacheMu.Unlock()
+	// 		log.Printf("Selected proxy %s for domain %s and all its subdomains via HEAD", proxy, mainDom)
+	// 		return
+	// 	}
+	// }
 	codes := make([]int, len(proxies))
 
 	// 2. Если все HEAD провалились - пробуем GET
