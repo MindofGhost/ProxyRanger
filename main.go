@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -34,7 +35,7 @@ var (
 
 const (
 	minBodyLength      = 1000
-	checkRetryAttempts = 10
+	checkRetryAttempts = 6
 	chromeUA           = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 )
 
@@ -153,6 +154,76 @@ func loadCache() {
 
 }
 
+func dpiUploadProbe(
+	ctx context.Context,
+	client *http.Client,
+	url string,
+	host string,
+	bytesTotal int,
+	bytesPerChunk int,
+	delay time.Duration,
+) (sent int, err error) {
+
+	pr, pw := io.Pipe()
+	sentCh := make(chan int, 1)
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", url, pr)
+	if err != nil {
+		return 0, err
+	}
+
+	req.Host = host
+	req.Header.Set("User-Agent", chromeUA)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Expect", "100-continue")
+
+	go func() {
+		defer pw.Close()
+
+		buf := make([]byte, bytesPerChunk)
+		sent := 0
+
+		for sent < bytesTotal {
+			select {
+			case <-ctx.Done():
+				sentCh <- sent
+				return
+			default:
+			}
+
+			_, err := rand.Read(buf)
+			if err != nil {
+				pw.CloseWithError(err)
+				sentCh <- sent
+				return
+			}
+
+			n, err := pw.Write(buf)
+			if err != nil {
+				sentCh <- sent
+				return
+			}
+
+			sent += n
+			time.Sleep(delay)
+		}
+
+		sentCh <- sent
+	}()
+
+	resp, err := client.Do(req)
+	if err != nil {
+		sent = <-sentCh
+		return sent, err
+	}
+	defer resp.Body.Close()
+
+	io.CopyN(io.Discard, resp.Body, 512)
+
+	sent = <-sentCh
+	return sent, nil
+}
+
 func makeRequest(client *http.Client, req *http.Request, proxyURL, target, method string) (ok bool, status int) {
 
 	resp, err := client.Do(req)
@@ -205,6 +276,33 @@ func checkProxy(proxyURL string, target string, method string) (ok bool, status 
 			},
 		},
 		Timeout: 3000 * time.Millisecond,
+	}
+
+	if method == "PUT" {
+		ctx, cancel := context.WithTimeout(context.Background(), 3000*time.Millisecond)
+		defer cancel()
+
+		sent, err := dpiUploadProbe(
+			ctx,
+			client,
+			"https://"+target,
+			target,
+			64*1024, // 64 KB всего
+			4096,    // по 4 KB
+			40*time.Millisecond,
+		)
+
+		if err != nil {
+			log.Printf("PUT probe via %s failed after %d bytes: %v", proxyURL, sent, err)
+			return false, 0
+		}
+
+		if sent < 16*1024 {
+			log.Printf("PUT probe via %s cut at %d bytes → DPI suspected", proxyURL, sent)
+			return false, 0
+		}
+
+		return true, 0
 	}
 
 	baseReq, err := http.NewRequest(method, "https://"+target, nil)
@@ -285,25 +383,34 @@ func findWorkingProxy(domain string) (string, bool) {
 		}(mainDom, ch)
 	}
 
+	localProxies := make([]string, 0, len(proxies))
+
+	for _, proxy := range proxies {
+		ok, _ := checkProxy(proxy, domain, "PUT")
+		if ok {
+			localProxies = append(localProxies, proxy)
+		}
+	}
+
 	var lastProxy string
-	if len(proxies) > 0 {
-		lastProxy = proxies[len(proxies)-1]
+	if len(localProxies) > 0 {
+		lastProxy = localProxies[len(localProxies)-1]
 	}
 
 	// Проверяем апстримы для поддомена
-	// for _, proxy := range proxies {
-	// 	if ok, _ := checkProxy(proxy, domain, "HEAD"); ok {
-	// 		cacheMu.Lock()
-	// 		cache[mainDom] = proxy
-	// 		cacheMu.Unlock()
-	// 		log.Printf("Updated proxy %s for domain %s based on working subdomain %s via HEAD", proxy, mainDom, domain)
-	// 		return proxy, true
-	// 	}
-	// }
+	for _, proxy := range localProxies {
+		if ok, _ := checkProxy(proxy, domain, "HEAD"); ok {
+			cacheMu.Lock()
+			cache[mainDom] = proxy
+			cacheMu.Unlock()
+			log.Printf("Updated proxy %s for domain %s based on working subdomain %s via HEAD", proxy, mainDom, domain)
+			return proxy, true
+		}
+	}
 
 	// Если все HEAD провалились - пробуем GET
-	codes := make([]int, len(proxies))
-	for i, proxy := range proxies {
+	codes := make([]int, len(localProxies))
+	for i, proxy := range localProxies {
 		ok, code := checkProxy(proxy, domain, "GET")
 		codes[i] = code
 		if ok {
@@ -330,21 +437,19 @@ func findWorkingProxy(domain string) (string, bool) {
 	}
 
 	if lastProxy != "" {
-		for i := len(proxies) - 2; i >= 0; i-- {
-			if codes[i] != codes[len(proxies)-1] {
+		for i := len(localProxies) - 2; i >= 0; i-- {
+			if codes[i] != codes[len(localProxies)-1] {
 				cacheMu.Lock()
-				cache[mainDom] = proxies[i+1]
+				cache[mainDom] = localProxies[i+1]
 				cacheMu.Unlock()
-				log.Printf("Updated proxy %s for domain %s based on response difference", proxies[i+1], mainDom)
-				return proxies[i+1], true
+				log.Printf("Updated proxy %s for domain %s based on response difference", localProxies[i+1], mainDom)
+				return localProxies[i+1], true
 			}
 		}
-		// fallback на последний
-		log.Printf("All proxies failed for %s, falling back to last proxy %s", domain, lastProxy)
-		return lastProxy, true
 	}
-
-	return "", false
+	// fallback на последний
+	log.Printf("All proxies failed for %s, falling back to last proxy %s", domain, proxies[len(proxies)-1])
+	return proxies[len(proxies)-1], true
 }
 
 // Функция проверки канала
@@ -367,15 +472,15 @@ func checkMainDomain(mainDom string) {
 		lastProxy = proxies[len(proxies)-1]
 	}
 	// Проверяем основной домен
-	// for _, proxy := range proxies {
-	// 	if ok, _ := checkProxy(proxy, mainDom, "HEAD"); ok {
-	// 		cacheMu.Lock()
-	// 		cache[mainDom] = proxy
-	// 		cacheMu.Unlock()
-	// 		log.Printf("Selected proxy %s for domain %s and all its subdomains via HEAD", proxy, mainDom)
-	// 		return
-	// 	}
-	// }
+	for _, proxy := range proxies {
+		if ok, _ := checkProxy(proxy, mainDom, "HEAD"); ok {
+			cacheMu.Lock()
+			cache[mainDom] = proxy
+			cacheMu.Unlock()
+			log.Printf("Selected proxy %s for domain %s and all its subdomains via HEAD", proxy, mainDom)
+			return
+		}
+	}
 	codes := make([]int, len(proxies))
 
 	// 2. Если все HEAD провалились - пробуем GET
