@@ -284,7 +284,7 @@ func checkProxy(proxyURL string, target string, method string) (ok bool, status 
 		)
 
 		if err != nil {
-			log.Printf("PUT probe via %s for %s failed: %v", proxyURL, target, err)
+			log.Printf("PUT <DPI Detected> Remove proxy %s from check for %s. Returned error: %s", proxyURL, target, err)
 			return false, 0
 		}
 
@@ -383,7 +383,7 @@ func findWorkingProxy(domain string) (string, bool) {
 		localProxies = make([]string, len(proxies))
 		copy(localProxies, proxies)
 	}
-	if len(localProxies) > 0 {
+	if len(localProxies) > 1 {
 		lastProxy = localProxies[len(localProxies)-1]
 	}
 
@@ -427,13 +427,18 @@ func findWorkingProxy(domain string) (string, bool) {
 	}
 
 	if lastProxy != "" {
-		for i := len(localProxies) - 2; i >= 0; i-- {
-			if codes[i] != codes[len(localProxies)-1] {
-				cacheMu.Lock()
-				cache[mainDom] = localProxies[i+1]
-				cacheMu.Unlock()
-				log.Printf("Updated proxy %s for domain %s based on response difference", localProxies[i+1], mainDom)
-				return localProxies[i+1], true
+		idx := len(localProxies) - 1
+		for i := len(localProxies) - 1; i > 0; i-- {
+			if codes[i] == codes[len(localProxies)-2] {
+				idx--
+			} else {
+				if idx != len(localProxies)-1 {
+					cacheMu.Lock()
+					cache[mainDom] = localProxies[idx]
+					cacheMu.Unlock()
+					log.Printf("Updated proxy %s for domain %s based on response difference", localProxies[idx], mainDom)
+					return localProxies[idx], true
+				}
 			}
 		}
 	}
@@ -457,12 +462,25 @@ func getOrCreateChannel(mainDom string) (chan struct{}, bool) {
 // Функция проверки главного домена
 func checkMainDomain(mainDom string) {
 	log.Printf("Starting background mainDom check for %s", mainDom)
+	localProxies := make([]string, 0, len(proxies))
+
+	for _, proxy := range proxies {
+		ok, _ := checkProxy(proxy, mainDom, "PUT")
+		if ok {
+			localProxies = append(localProxies, proxy)
+		}
+	}
+
 	var lastProxy string
-	if len(proxies) > 0 {
-		lastProxy = proxies[len(proxies)-1]
+	if len(localProxies) == 0 {
+		localProxies = make([]string, len(proxies))
+		copy(localProxies, proxies)
+	}
+	if len(localProxies) > 1 {
+		lastProxy = localProxies[len(localProxies)-1]
 	}
 	// Проверяем основной домен
-	for _, proxy := range proxies {
+	for _, proxy := range localProxies {
 		if ok, _ := checkProxy(proxy, mainDom, "HEAD"); ok {
 			cacheMu.Lock()
 			cache[mainDom] = proxy
@@ -471,10 +489,10 @@ func checkMainDomain(mainDom string) {
 			return
 		}
 	}
-	codes := make([]int, len(proxies))
+	codes := make([]int, len(localProxies))
 
 	// 2. Если все HEAD провалились - пробуем GET
-	for i, proxy := range proxies {
+	for i, proxy := range localProxies {
 		ok, code := checkProxy(proxy, mainDom, "GET")
 		codes[i] = code
 		if ok {
@@ -486,13 +504,18 @@ func checkMainDomain(mainDom string) {
 		}
 	}
 	if lastProxy != "" {
-		for i := len(proxies) - 2; i >= 0; i-- {
-			if codes[i] != codes[len(proxies)-1] {
-				cacheMu.Lock()
-				cache[mainDom] = proxies[i+1]
-				cacheMu.Unlock()
-				log.Printf("Updated proxy %s for domain %s and all its subdomains based on response difference", proxies[i+1], mainDom)
-				return
+		idx := len(localProxies) - 1
+		for i := len(localProxies) - 1; i > 0; i-- {
+			if codes[i] == codes[len(localProxies)-2] {
+				idx--
+			} else {
+				if idx != len(localProxies)-1 {
+					cacheMu.Lock()
+					cache[mainDom] = localProxies[idx]
+					cacheMu.Unlock()
+					log.Printf("Updated proxy %s for domain %s and all its subdomains based on response difference", localProxies[idx], mainDom)
+					return
+				}
 			}
 		}
 	}
