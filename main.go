@@ -369,12 +369,24 @@ func findWorkingProxy(domain string) (string, bool) {
 		}(mainDom, ch)
 	}
 
-	localProxies := make([]string, 0, len(proxies))
+	okResults := make([]bool, len(proxies))
 
-	for _, proxy := range proxies {
-		ok, _ := checkProxy(proxy, domain, "PUT")
+	var wg sync.WaitGroup
+	for i, proxy := range proxies {
+		wg.Add(1)
+		go func(i int, p string) {
+			defer wg.Done()
+			ok, _ := checkProxy(p, domain, "PUT")
+			okResults[i] = ok
+		}(i, proxy)
+	}
+
+	wg.Wait()
+
+	localProxies := make([]string, 0, len(proxies))
+	for i, ok := range okResults {
 		if ok {
-			localProxies = append(localProxies, proxy)
+			localProxies = append(localProxies, proxies[i])
 		}
 	}
 
