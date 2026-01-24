@@ -278,9 +278,9 @@ func checkProxy(proxyURL string, target string, method string) (ok bool, status 
 			client,
 			"https://"+target,
 			target,
-			64*1024,
-			4096,
-			40*time.Millisecond,
+			128*1024,
+			16*4096,
+			8*time.Millisecond,
 		)
 
 		if err != nil {
