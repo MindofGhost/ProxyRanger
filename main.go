@@ -431,15 +431,16 @@ func findWorkingProxy(domain string) (string, bool) {
 		for i := len(localProxies) - 1; i > 0; i-- {
 			if codes[i] == codes[len(localProxies)-2] {
 				idx--
-			} else {
-				if idx != len(localProxies)-1 {
-					cacheMu.Lock()
-					cache[mainDom] = localProxies[idx]
-					cacheMu.Unlock()
-					log.Printf("Updated proxy %s for domain %s based on response difference", localProxies[idx], mainDom)
-					return localProxies[idx], true
-				}
+				continue
 			}
+			if idx != len(localProxies)-1 {
+				cacheMu.Lock()
+				cache[mainDom] = localProxies[idx]
+				cacheMu.Unlock()
+				log.Printf("Updated proxy %s for domain %s based on response difference", localProxies[idx], mainDom)
+				return localProxies[idx], true
+			}
+
 		}
 	}
 	// fallback на последний
@@ -508,14 +509,14 @@ func checkMainDomain(mainDom string) {
 		for i := len(localProxies) - 1; i > 0; i-- {
 			if codes[i] == codes[len(localProxies)-2] {
 				idx--
-			} else {
-				if idx != len(localProxies)-1 {
-					cacheMu.Lock()
-					cache[mainDom] = localProxies[idx]
-					cacheMu.Unlock()
-					log.Printf("Updated proxy %s for domain %s and all its subdomains based on response difference", localProxies[idx], mainDom)
-					return
-				}
+				continue
+			}
+			if idx != len(localProxies)-1 {
+				cacheMu.Lock()
+				cache[mainDom] = localProxies[idx]
+				cacheMu.Unlock()
+				log.Printf("Updated proxy %s for domain %s and all its subdomains based on response difference", localProxies[idx], mainDom)
+				return
 			}
 		}
 	}
