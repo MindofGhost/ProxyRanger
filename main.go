@@ -162,14 +162,13 @@ func dpiUploadProbe(
 	bytesTotal int,
 	bytesPerChunk int,
 	delay time.Duration,
-) (sent int, err error) {
+) error {
 
 	pr, pw := io.Pipe()
-	sentCh := make(chan int, 1)
 
 	req, err := http.NewRequestWithContext(ctx, "PUT", url, pr)
 	if err != nil {
-		return 0, err
+		return err
 	}
 
 	req.Host = host
@@ -186,42 +185,34 @@ func dpiUploadProbe(
 		for sent < bytesTotal {
 			select {
 			case <-ctx.Done():
-				sentCh <- sent
 				return
 			default:
 			}
 
-			_, err := rand.Read(buf)
-			if err != nil {
+			if _, err := rand.Read(buf); err != nil {
 				pw.CloseWithError(err)
-				sentCh <- sent
 				return
 			}
 
 			n, err := pw.Write(buf)
 			if err != nil {
-				sentCh <- sent
 				return
 			}
 
 			sent += n
 			time.Sleep(delay)
 		}
-
-		sentCh <- sent
 	}()
 
 	resp, err := client.Do(req)
 	if err != nil {
-		sent = <-sentCh
-		return sent, err
+		return err
 	}
 	defer resp.Body.Close()
 
 	io.CopyN(io.Discard, resp.Body, 512)
 
-	sent = <-sentCh
-	return sent, nil
+	return nil
 }
 
 func makeRequest(client *http.Client, req *http.Request, proxyURL, target, method string) (ok bool, status int) {
@@ -282,23 +273,18 @@ func checkProxy(proxyURL string, target string, method string) (ok bool, status 
 		ctx, cancel := context.WithTimeout(context.Background(), 3000*time.Millisecond)
 		defer cancel()
 
-		sent, err := dpiUploadProbe(
+		err := dpiUploadProbe(
 			ctx,
 			client,
 			"https://"+target,
 			target,
-			64*1024, // 64 KB всего
-			4096,    // по 4 KB
+			64*1024,
+			4096,
 			40*time.Millisecond,
 		)
 
 		if err != nil {
-			log.Printf("PUT probe via %s failed after %d bytes: %v", proxyURL, sent, err)
-			return false, 0
-		}
-
-		if sent < 16*1024 {
-			log.Printf("PUT probe via %s cut at %d bytes → DPI suspected", proxyURL, sent)
+			log.Printf("PUT probe via %s for %s failed: %v", proxyURL, target, err)
 			return false, 0
 		}
 
