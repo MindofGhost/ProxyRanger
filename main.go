@@ -380,9 +380,10 @@ func findWorkingProxy(domain string) (string, bool) {
 
 	var lastProxy string
 	if len(localProxies) == 0 {
-		localProxies = proxies
-		lastProxy = proxies[len(proxies)-1]
-	} else {
+		localProxies = make([]string, len(proxies))
+		copy(localProxies, proxies)
+	}
+	if len(localProxies) > 0 {
 		lastProxy = localProxies[len(localProxies)-1]
 	}
 
