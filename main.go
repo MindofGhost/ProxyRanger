@@ -258,15 +258,15 @@ func checkProxy(proxyURL string, target string, method string) (ok bool, status 
 			DialContext: (&net.Dialer{
 				Timeout: 1 * time.Second,
 			}).DialContext,
-			TLSHandshakeTimeout:   1800 * time.Millisecond,
-			ResponseHeaderTimeout: 2500 * time.Millisecond,
-			ExpectContinueTimeout: 500 * time.Millisecond,
+			TLSHandshakeTimeout:   2500 * time.Millisecond,
+			ResponseHeaderTimeout: 3000 * time.Millisecond,
+			ExpectContinueTimeout: 1200 * time.Millisecond,
 			DisableCompression:    true,
 			TLSClientConfig: &tls.Config{
 				RootCAs: certPool,
 			},
 		},
-		Timeout: 3000 * time.Millisecond,
+		Timeout: 5000 * time.Millisecond,
 	}
 
 	if method == "PUT" {
@@ -379,7 +379,10 @@ func findWorkingProxy(domain string) (string, bool) {
 	}
 
 	var lastProxy string
-	if len(localProxies) > 0 {
+	if len(localProxies) == 0 {
+		localProxies = proxies
+		lastProxy = proxies[len(proxies)-1]
+	} else {
 		lastProxy = localProxies[len(localProxies)-1]
 	}
 
