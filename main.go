@@ -431,7 +431,9 @@ func findWorkingProxy(domain string) (string, bool) {
 		for i := len(localProxies) - 1; i > 0; i-- {
 			if codes[i] == codes[len(localProxies)-2] {
 				idx--
-				continue
+				if i != 1 {
+					continue
+				}
 			}
 			if idx != len(localProxies)-1 {
 				cacheMu.Lock()
@@ -509,7 +511,9 @@ func checkMainDomain(mainDom string) {
 		for i := len(localProxies) - 1; i > 0; i-- {
 			if codes[i] == codes[len(localProxies)-2] {
 				idx--
-				continue
+				if i != 1 {
+					continue
+				}
 			}
 			if idx != len(localProxies)-1 {
 				cacheMu.Lock()
