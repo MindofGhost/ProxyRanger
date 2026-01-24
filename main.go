@@ -431,7 +431,7 @@ func findWorkingProxy(domain string) (string, bool) {
 		for i := len(localProxies) - 1; i > 0; i-- {
 			if codes[i] == codes[len(localProxies)-2] {
 				idx--
-				if i != 1 {
+				if i != 1 || len(localProxies) > 2 {
 					continue
 				}
 			}
@@ -511,7 +511,7 @@ func checkMainDomain(mainDom string) {
 		for i := len(localProxies) - 1; i > 0; i-- {
 			if codes[i] == codes[len(localProxies)-2] {
 				idx--
-				if i != 1 {
+				if i != 1 || len(localProxies) > 2 {
 					continue
 				}
 			}
