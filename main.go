@@ -399,13 +399,9 @@ func findWorkingProxy(domain string) (string, bool) {
 			}
 		}
 
-		var lastProxy string
 		if len(localProxies) == 0 {
 			localProxies = make([]string, len(proxies))
 			copy(localProxies, proxies)
-		}
-		if len(localProxies) > 1 {
-			lastProxy = localProxies[len(localProxies)-1]
 		}
 
 		// Проверяем апстримы для поддомена
@@ -447,12 +443,12 @@ func findWorkingProxy(domain string) (string, bool) {
 			cacheMu.RUnlock()
 		}
 
-		if lastProxy != "" {
+		if len(localProxies) > 1 {
 			idx := len(localProxies) - 1
 			for i := len(localProxies) - 1; i > 0; i-- {
-				if codes[i] == codes[len(localProxies)-2] {
+				if codes[i] == codes[i-1] {
 					idx--
-					if i != 1 || len(localProxies) == len(proxies) {
+					if i != 1 || len(localProxies) == len(proxies) || (codes[i] == 403 && i == 1) {
 						continue
 					}
 				}
@@ -506,24 +502,20 @@ func checkMainDomain(mainDom string) {
 		}
 	}
 
-	var lastProxy string
 	if len(localProxies) == 0 {
 		localProxies = make([]string, len(proxies))
 		copy(localProxies, proxies)
 	}
-	if len(localProxies) > 1 {
-		lastProxy = localProxies[len(localProxies)-1]
-	}
 	// Проверяем основной домен
-	for _, proxy := range localProxies {
-		if ok, _ := checkProxy(proxy, mainDom, "HEAD"); ok {
-			cacheMu.Lock()
-			cache[mainDom] = proxy
-			cacheMu.Unlock()
-			log.Printf("Selected proxy %s for domain %s and all its subdomains via HEAD", proxy, mainDom)
-			return
-		}
-	}
+	// for _, proxy := range localProxies {
+	// 	if ok, _ := checkProxy(proxy, mainDom, "HEAD"); ok {
+	// 		cacheMu.Lock()
+	// 		cache[mainDom] = proxy
+	// 		cacheMu.Unlock()
+	// 		log.Printf("Selected proxy %s for domain %s and all its subdomains via HEAD", proxy, mainDom)
+	// 		return
+	// 	}
+	// }
 	codes := make([]int, len(localProxies))
 
 	// 2. Если все HEAD провалились - пробуем GET
@@ -538,12 +530,12 @@ func checkMainDomain(mainDom string) {
 			return
 		}
 	}
-	if lastProxy != "" {
+	if len(localProxies) > 1 {
 		idx := len(localProxies) - 1
 		for i := len(localProxies) - 1; i > 0; i-- {
-			if codes[i] == codes[len(localProxies)-2] {
+			if codes[i] == codes[i-1] {
 				idx--
-				if i != 1 || len(localProxies) == len(proxies) {
+				if i != 1 || len(localProxies) == len(proxies) || (codes[i] == 403 && i == 1) {
 					continue
 				}
 			}
