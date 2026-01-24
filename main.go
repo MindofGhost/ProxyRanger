@@ -352,7 +352,12 @@ func findWorkingProxy(domain string) (string, bool) {
 	cacheMu.RUnlock()
 
 	domCh, domLoaded := getOrCreateChannel(domain)
-	if domLoaded {
+	if !domLoaded {
+		defer func() {
+			close(domCh)
+			inProgress.Delete(domain)
+		}()
+
 		chNeeded := domain != mainDom && net.ParseIP(domain) == nil
 		ch, loaded := getOrCreateChannel(func() string {
 			if chNeeded {
