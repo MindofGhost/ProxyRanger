@@ -351,6 +351,32 @@ func findWorkingProxy(domain string) (string, bool) {
 	}
 	cacheMu.RUnlock()
 
+	okResults := make([]bool, len(proxies))
+
+	var wg sync.WaitGroup
+	for i, proxy := range proxies {
+		wg.Add(1)
+		go func(i int, p string) {
+			defer wg.Done()
+			ok, _ := checkProxy(p, domain, "PUT")
+			okResults[i] = ok
+		}(i, proxy)
+	}
+
+	wg.Wait()
+
+	localProxies := make([]string, 0, len(proxies))
+	for i, ok := range okResults {
+		if ok {
+			localProxies = append(localProxies, proxies[i])
+		}
+	}
+
+	if len(localProxies) == 0 {
+		localProxies = make([]string, len(proxies))
+		copy(localProxies, proxies)
+	}
+
 	domCh, domLoaded := getOrCreateChannel(domain)
 	if !domLoaded {
 		defer func() {
@@ -374,34 +400,8 @@ func findWorkingProxy(domain string) (string, bool) {
 					close(ch)
 					inProgress.Delete(mainDom)
 				}()
-				checkMainDomain(mainDom)
+				checkMainDomain(mainDom, localProxies)
 			}(mainDom, ch)
-		}
-
-		okResults := make([]bool, len(proxies))
-
-		var wg sync.WaitGroup
-		for i, proxy := range proxies {
-			wg.Add(1)
-			go func(i int, p string) {
-				defer wg.Done()
-				ok, _ := checkProxy(p, domain, "PUT")
-				okResults[i] = ok
-			}(i, proxy)
-		}
-
-		wg.Wait()
-
-		localProxies := make([]string, 0, len(proxies))
-		for i, ok := range okResults {
-			if ok {
-				localProxies = append(localProxies, proxies[i])
-			}
-		}
-
-		if len(localProxies) == 0 {
-			localProxies = make([]string, len(proxies))
-			copy(localProxies, proxies)
 		}
 
 		// Проверяем апстримы для поддомена
@@ -491,11 +491,11 @@ func getOrCreateChannel(mainDom string) (chan struct{}, bool) {
 }
 
 // Функция проверки главного домена
-func checkMainDomain(mainDom string) {
+func checkMainDomain(mainDom string, mainDomainProxies []string) {
 	log.Printf("Starting background mainDom check for %s", mainDom)
-	localProxies := make([]string, 0, len(proxies))
+	localProxies := make([]string, 0, len(mainDomainProxies))
 
-	for _, proxy := range proxies {
+	for _, proxy := range mainDomainProxies {
 		ok, _ := checkProxy(proxy, mainDom, "PUT")
 		if ok {
 			localProxies = append(localProxies, proxy)
@@ -503,8 +503,8 @@ func checkMainDomain(mainDom string) {
 	}
 
 	if len(localProxies) == 0 {
-		localProxies = make([]string, len(proxies))
-		copy(localProxies, proxies)
+		localProxies = make([]string, len(mainDomainProxies))
+		copy(localProxies, mainDomainProxies)
 	}
 	// Проверяем основной домен
 	// for _, proxy := range localProxies {
