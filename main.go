@@ -580,6 +580,7 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(target, ":") {
 			target += ":443"
 		}
+
 		domain := strings.Split(r.Host, ":")[0]
 
 		upstream, ok := findWorkingProxy(domain)
@@ -590,9 +591,23 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		upURL, _ := url.Parse(upstream)
-		dialer := net.Dialer{Timeout: 15 * time.Second}
-		conn, err := dialer.Dial("tcp", upURL.Host)
+		log.Printf("CONNECT %s via %s", target, upstream)
+
+		upURL, err := url.Parse(upstream)
+		if err != nil {
+			log.Printf("Invalid upstream URL: %v", err)
+			clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+			clientConn.Close()
+			return
+		}
+
+		// Dial с keepalive
+		dialer := net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}
+
+		upstreamConn, err := dialer.Dial("tcp", upURL.Host)
 		if err != nil {
 			log.Printf("Dial upstream error: %v", err)
 			clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
@@ -600,94 +615,80 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// CONNECT к upstream
+		// Включаем TCP keepalive
+		if tcp, ok := upstreamConn.(*net.TCPConn); ok {
+			tcp.SetKeepAlive(true)
+			tcp.SetKeepAlivePeriod(30 * time.Second)
+		}
+		if tcp, ok := clientConn.(*net.TCPConn); ok {
+			tcp.SetKeepAlive(true)
+			tcp.SetKeepAlivePeriod(30 * time.Second)
+		}
+
+		// Отправляем CONNECT на upstream
 		connectReq := "CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n\r\n"
-		if _, err := conn.Write([]byte(connectReq)); err != nil {
+		if _, err := upstreamConn.Write([]byte(connectReq)); err != nil {
 			log.Printf("Upstream write error: %v", err)
 			clientConn.Close()
-			conn.Close()
+			upstreamConn.Close()
 			return
 		}
 
-		reader := bufio.NewReader(conn)
+		// Читаем ответ от upstream
+		reader := bufio.NewReader(upstreamConn)
 		resp, err := http.ReadResponse(reader, r)
 		if err != nil {
 			log.Printf("Upstream CONNECT read error: %v", err)
 			clientConn.Close()
-			conn.Close()
+			upstreamConn.Close()
 			return
 		}
 		resp.Body.Close()
+
 		if resp.StatusCode != 200 {
-			log.Printf("Upstream refused CONNECT (status %d)", resp.StatusCode)
+			log.Printf("Upstream refused CONNECT (%d)", resp.StatusCode)
 			clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 			clientConn.Close()
-			conn.Close()
+			upstreamConn.Close()
 			return
 		}
 
-		// Отправляем клиенту успешное подтверждение
-		clientConn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
-		log.Printf("Tunnel established via %s to %s", upstream, target)
-
-		// Idle timeout контроль
-		idleTimeout := 60 * time.Second
-		lastActivity := time.Now()
-		activity := make(chan struct{}, 1)
-
-		// Функция для обновления активности
-		updateActivity := func() {
-			select {
-			case activity <- struct{}{}:
-			default:
-			}
+		// Подтверждаем клиенту
+		if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n")); err != nil {
+			upstreamConn.Close()
+			clientConn.Close()
+			return
 		}
 
-		// Безопасный goroutine для копирования данных client -> upstream
+		log.Printf("Tunnel established: %s <-> %s", clientConn.RemoteAddr(), target)
+
+		// Двунаправленное копирование с корректным закрытием
+		done := make(chan struct{}, 2)
+
 		go func() {
-			buf := make([]byte, 32*1024)
-			for {
-				n, err := clientConn.Read(buf)
-				if n > 0 {
-					_, _ = conn.Write(buf[:n])
-					updateActivity()
-				}
-				if err != nil {
-					conn.Close()
-					clientConn.Close()
-					return
-				}
+			_, _ = io.Copy(upstreamConn, clientConn)
+			if tcp, ok := upstreamConn.(*net.TCPConn); ok {
+				tcp.CloseWrite()
 			}
+			done <- struct{}{}
 		}()
 
-		// Основной поток: upstream -> client
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := conn.Read(buf)
-			if n > 0 {
-				_, _ = clientConn.Write(buf[:n])
-				lastActivity = time.Now()
+		go func() {
+			_, _ = io.Copy(clientConn, upstreamConn)
+			if tcp, ok := clientConn.(*net.TCPConn); ok {
+				tcp.CloseWrite()
 			}
-			if err != nil {
-				break
-			}
+			done <- struct{}{}
+		}()
 
-			select {
-			case <-activity:
-				lastActivity = time.Now()
-			default:
-			}
+		// Ждём завершения обеих сторон
+		<-done
+		<-done
 
-			// Проверка на бездействие
-			if time.Since(lastActivity) > idleTimeout {
-				log.Printf("Closing idle tunnel %s after %v inactivity", target, idleTimeout)
-				break
-			}
-		}
-
-		conn.Close()
+		upstreamConn.Close()
 		clientConn.Close()
-		log.Printf("Tunnel closed for %s", target)
+
+		log.Printf("Tunnel closed: %s", target)
 		return
 	}
 	// HTTP GET/POST
