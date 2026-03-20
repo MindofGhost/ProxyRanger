@@ -405,15 +405,15 @@ func findWorkingProxy(domain string) (string, bool) {
 		}
 
 		// Проверяем апстримы для поддомена
-		for _, proxy := range localProxies {
-			if ok, _ := checkProxy(proxy, domain, "HEAD"); ok {
-				cacheMu.Lock()
-				cache[mainDom] = proxy
-				cacheMu.Unlock()
-				log.Printf("Updated proxy %s for domain %s based on working subdomain %s via HEAD", proxy, mainDom, domain)
-				return proxy, true
-			}
-		}
+		// for _, proxy := range localProxies {
+		// 	if ok, _ := checkProxy(proxy, domain, "HEAD"); ok {
+		// 		cacheMu.Lock()
+		// 		cache[mainDom] = proxy
+		// 		cacheMu.Unlock()
+		// 		log.Printf("Updated proxy %s for domain %s based on working subdomain %s via HEAD", proxy, mainDom, domain)
+		// 		return proxy, true
+		// 	}
+		// }
 
 		// Если все HEAD провалились - пробуем GET
 		codes := make([]int, len(localProxies))
