@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -616,27 +615,15 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 🔧 ADDED: функция усиленного TCP keepalive (Linux)
-		setKeepAlive := func(conn net.Conn) {
-			if tcp, ok := conn.(*net.TCPConn); ok {
-				tcp.SetKeepAlive(true)
-				tcp.SetKeepAlivePeriod(30 * time.Second)
-				tcp.SetNoDelay(true) // 🔧 ADDED: отключаем Nagle
-
-				rawConn, err := tcp.SyscallConn()
-				if err == nil {
-					rawConn.Control(func(fd uintptr) {
-						syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPIDLE, 30)
-						syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPINTVL, 10)
-						syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPCNT, 3)
-					})
-				}
-			}
+		// Включаем TCP keepalive
+		if tcp, ok := upstreamConn.(*net.TCPConn); ok {
+			tcp.SetKeepAlive(true)
+			tcp.SetKeepAlivePeriod(30 * time.Second)
 		}
-
-		// 🔧 ADDED: применяем keepalive к обоим соединениям
-		setKeepAlive(upstreamConn)
-		setKeepAlive(clientConn)
+		if tcp, ok := clientConn.(*net.TCPConn); ok {
+			tcp.SetKeepAlive(true)
+			tcp.SetKeepAlivePeriod(30 * time.Second)
+		}
 
 		// Отправляем CONNECT на upstream
 		connectReq := "CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n\r\n"
@@ -675,42 +662,26 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 
 		log.Printf("Tunnel established: %s <-> %s", clientConn.RemoteAddr(), target)
 
-		//  copy с логированием и таймаутами
-		copyWithTimeout := func(dst net.Conn, src net.Conn, direction string, done chan struct{}) {
-			buf := make([]byte, 32*1024)
-
-			for {
-				src.SetReadDeadline(time.Now().Add(5 * time.Minute))
-
-				n, err := src.Read(buf)
-				if n > 0 {
-					dst.SetWriteDeadline(time.Now().Add(30 * time.Second))
-
-					_, werr := dst.Write(buf[:n])
-					if werr != nil {
-						log.Printf("%s write error: %v", direction, werr)
-						break
-					}
-				}
-
-				if err != nil {
-					log.Printf("%s read error: %v", direction, err)
-					break
-				}
-			}
-
-			if tcp, ok := dst.(*net.TCPConn); ok {
-				tcp.CloseWrite()
-			}
-
-			done <- struct{}{}
-		}
-
+		// Двунаправленное копирование с корректным закрытием
 		done := make(chan struct{}, 2)
 
-		go copyWithTimeout(upstreamConn, clientConn, "client->upstream", done)
-		go copyWithTimeout(clientConn, upstreamConn, "upstream->client", done)
+		go func() {
+			_, _ = io.Copy(upstreamConn, clientConn)
+			if tcp, ok := upstreamConn.(*net.TCPConn); ok {
+				tcp.CloseWrite()
+			}
+			done <- struct{}{}
+		}()
 
+		go func() {
+			_, _ = io.Copy(clientConn, upstreamConn)
+			if tcp, ok := clientConn.(*net.TCPConn); ok {
+				tcp.CloseWrite()
+			}
+			done <- struct{}{}
+		}()
+
+		// Ждём завершения обеих сторон
 		<-done
 		<-done
 
