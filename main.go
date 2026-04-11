@@ -646,7 +646,7 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 		resp.Body.Close()
 
 		if resp.StatusCode != 200 {
-			log.Printf("Upstream refused CONNECT (%d)", resp.StatusCode)
+			log.Printf("Upstream %s refused CONNECT (%d) to %s", r.URL, resp.StatusCode, r.Host)
 			clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 			clientConn.Close()
 			upstreamConn.Close()
