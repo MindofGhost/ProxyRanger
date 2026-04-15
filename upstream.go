@@ -274,7 +274,7 @@ func findWorkingProxy(domain string) (string, bool) {
 		// 		cacheMu.Lock()
 		// 		cache[mainDom] = proxy
 		// 		cacheMu.Unlock()
-		// 		log.Printf("Updated proxy %s for domain %s based on working subdomain %s via HEAD", proxy, mainDom, domain)
+		// 		log.Printf("Updated proxy %s for domain %s based on working subdomain %s via HEAD", proxy.URL, mainDom, domain)
 		// 		return proxy, true
 		// 	}
 		// }
@@ -288,7 +288,7 @@ func findWorkingProxy(domain string) (string, bool) {
 				cacheMu.Lock()
 				cache[mainDom] = proxy.URL
 				cacheMu.Unlock()
-				log.Printf("Updated proxy %s for domain %s based on working subdomain %s via GET", proxy, mainDom, domain)
+				log.Printf("Updated proxy %s for domain %s based on working subdomain %s via GET", proxy.URL, mainDom, domain)
 				return proxy.URL, true
 			}
 		}
@@ -320,7 +320,7 @@ func findWorkingProxy(domain string) (string, bool) {
 					cacheMu.Lock()
 					cache[mainDom] = localProxies[idx].URL
 					cacheMu.Unlock()
-					log.Printf("Updated proxy %s for domain %s based on response difference", localProxies[idx], mainDom)
+					log.Printf("Updated proxy %s for domain %s based on response difference", localProxies[idx].URL, mainDom)
 					return localProxies[idx].URL, true
 				}
 
@@ -391,7 +391,7 @@ func checkMainDomain(mainDom string, mainDomainProxies []*Proxy) {
 			cacheMu.Lock()
 			cache[mainDom] = proxy.URL
 			cacheMu.Unlock()
-			log.Printf("Selected proxy %s for domain %s and all its subdomains via GET", proxy, mainDom)
+			log.Printf("Selected proxy %s for domain %s and all its subdomains via GET", proxy.URL, mainDom)
 			return
 		}
 	}
@@ -408,7 +408,7 @@ func checkMainDomain(mainDom string, mainDomainProxies []*Proxy) {
 				cacheMu.Lock()
 				cache[mainDom] = localProxies[idx].URL
 				cacheMu.Unlock()
-				log.Printf("Updated proxy %s for domain %s and all its subdomains based on response difference", localProxies[idx], mainDom)
+				log.Printf("Updated proxy %s for domain %s and all its subdomains based on response difference", localProxies[idx].URL, mainDom)
 				return
 			}
 		}
