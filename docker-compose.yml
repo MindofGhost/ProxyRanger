@@ -14,4 +14,4 @@ services:
     volumes:
       - ./cache:/app/cache
       - ./certs:/app/certs
-      - ./proxies.txt:/app/proxies.txt
+      - ./config.yml:/app/config.yml

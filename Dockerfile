@@ -15,7 +15,7 @@ ENV GOARCH=arm64
 ENV CGO_ENABLED=0
 
 # Build binary
-RUN go build -ldflags="-s -w -buildid=" -trimpath -o proxy main.go
+RUN go build -ldflags="-s -w -buildid=" -trimpath -o proxy
 
 # === Final stage ===
 FROM alpine:latest
@@ -29,7 +29,6 @@ WORKDIR /app
 COPY --from=builder /app/proxy .
 RUN chmod +x proxy
 
-COPY proxies.txt /app/
 EXPOSE 9990
 
 CMD ["./proxy"]

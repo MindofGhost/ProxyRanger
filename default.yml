@@ -1,0 +1,38 @@
+server:
+  host: ""
+  port: 9990
+  cacheSaveTimeSec: 300
+  certPath: certs
+  cacheFile: cache/cache.json
+  userCacheFile: cache/user.json
+  checkMethods:
+    - GET
+    - HEAD
+    - PUT
+
+proxies:
+  # - url: http://127.0.0.1:8880
+  # - url: http://127.0.0.1:8888
+  # - url: http://127.0.0.1:9994
+  #   blacklist:
+  #     - vpn
+
+timeouts:
+  checkProxy:
+    TLSHandshakeTimeout: 1800
+    responseHeaderTimeout: 2500
+    expectContinueTimeout: 500
+    timeout: 3000
+  clientConnection:
+    timeout: 30000
+    keepAlive: 30000
+
+
+dpi:
+  uploadProbe:
+    totalSizeKB: 128
+    chunkSizeKB: 64
+    delayMS: 8
+  retryAttempts: 6
+
+userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"

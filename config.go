@@ -1,0 +1,124 @@
+package main
+
+import (
+	_ "embed"
+	"fmt"
+	"gopkg.in/yaml.v3"
+	"net/url"
+	"os"
+)
+
+//go:embed default.yml
+var defaultConfigYAML []byte
+
+// ---------------- STRUCTS ----------------
+
+type Config struct {
+	Server    ServerConfig `yaml:"server"`
+	Proxies   []Proxy      `yaml:"proxies"`
+	Timeouts  Timeouts     `yaml:"timeouts"`
+	DPI       DPIConfig    `yaml:"dpi"`
+	UserAgent string       `yaml:"userAgent"`
+}
+
+type ServerConfig struct {
+	Host             string   `yaml:"host"`
+	Port             int      `yaml:"port"`
+	CacheSaveTimeSec int      `yaml:"cacheSaveTimeSec"`
+	CertPath         string   `yaml:"certPath"`
+	CacheFile        string   `yaml:"cacheFile"`
+	UserCacheFile    string   `yaml:"userCacheFile"`
+	CheckMethods     []string `yaml:"checkMethods"`
+}
+
+type Proxy struct {
+	URL       string   `yaml:"url"`
+	ParsedURL *url.URL `yaml:"-"`
+	Blacklist []string `yaml:"blacklist"`
+}
+
+type Timeouts struct {
+	CheckProxy       CheckProxyTimeouts `yaml:"checkProxy"`
+	ClientConnection ClientTimeouts     `yaml:"clientConnection"`
+}
+
+type CheckProxyTimeouts struct {
+	TLSHandshakeTimeout   int `yaml:"TLSHandshakeTimeout"`   // ms
+	ResponseHeaderTimeout int `yaml:"responseHeaderTimeout"` // ms
+	ExpectContinueTimeout int `yaml:"expectContinueTimeout"` // ms
+	Timeout               int `yaml:"timeout"`               // ms
+}
+
+type ClientTimeouts struct {
+	Timeout   int `yaml:"timeout"`   // ms
+	KeepAlive int `yaml:"keepAlive"` // ms
+}
+
+type DPIConfig struct {
+	UploadProbe   UploadProbe `yaml:"uploadProbe"`
+	RetryAttempts int         `yaml:"retryAttempts"`
+}
+
+type UploadProbe struct {
+	TotalSizeKB int `yaml:"totalSizeKB"`
+	ChunkSizeKB int `yaml:"chunkSizeKB"`
+	DelayMS     int `yaml:"delayMS"`
+}
+
+// ---------------- LOAD ----------------
+
+func LoadConfig(path string) (*Config, error) {
+
+	// 1. дефолт из embed
+	if err := yaml.Unmarshal(defaultConfigYAML, &cfg); err != nil {
+		return nil, fmt.Errorf("parse default config: %w", err)
+	}
+
+	// 2. пользовательский конфиг (опционально)
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read config: %w", err)
+		}
+
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			return nil, fmt.Errorf("parse config: %w", err)
+		}
+	}
+
+	// 3. валидация
+	if err := validateConfig(&cfg); err != nil {
+		return nil, err
+	}
+
+	return &cfg, nil
+}
+
+// ---------------- VALIDATION ----------------
+
+func validateConfig(c *Config) error {
+	if c.Server.Port == 0 {
+		return fmt.Errorf("server.port is required")
+	}
+
+	if len(c.Proxies) == 0 {
+		return fmt.Errorf("no proxies defined")
+	}
+
+	for i, p := range c.Proxies {
+		if p.URL == "" {
+			return fmt.Errorf("proxy[%d].url is required", i)
+		}
+		u, err := url.Parse(cfg.Proxies[i].URL)
+		if err != nil {
+			return fmt.Errorf("proxy[%d] invalid url %q: %w", i, p.URL, err)
+		}
+		cfg.Proxies[i].ParsedURL = u
+	}
+
+	if c.DPI.RetryAttempts < 0 {
+		return fmt.Errorf("dpi.retryAttempts must be >= 0")
+	}
+
+	return nil
+}
