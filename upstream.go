@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -202,6 +201,89 @@ func mainDomain(host string) string {
 	return host
 }
 
+type ProbeResult struct {
+	Proxy  *Proxy
+	OK     bool
+	Status int
+}
+
+// Запуск проверки одного proxy в горутине. Возвращаемый канал буферизованный
+// и закрывается после отправки результата — потребитель читает в любой момент.
+func probeAsync(proxy *Proxy, target, method string) <-chan ProbeResult {
+	ch := make(chan ProbeResult, 1)
+	go func() {
+		ok, status := checkProxy(proxy.ParsedURL, target, method)
+		ch <- ProbeResult{Proxy: proxy, OK: ok, Status: status}
+		close(ch)
+	}()
+	return ch
+}
+
+// Параллельный запуск probeAsync для каждого proxy с ожиданием всех результатов.
+// Срез возвращается в порядке входного списка proxies.
+func probeAll(proxies []*Proxy, target, method string) []ProbeResult {
+	chans := make([]<-chan ProbeResult, len(proxies))
+	for i, p := range proxies {
+		chans[i] = probeAsync(p, target, method)
+	}
+	out := make([]ProbeResult, len(proxies))
+	for i, ch := range chans {
+		out[i] = <-ch
+	}
+	return out
+}
+
+func proxyPtrs(ps []Proxy) []*Proxy {
+	out := make([]*Proxy, len(ps))
+	for i := range ps {
+		out[i] = &ps[i]
+	}
+	return out
+}
+
+// Возвращает proxy, успешно прошедшие пробу. Если таких нет — все из all.
+func survivorsOrAll(res []ProbeResult, all []Proxy) []*Proxy {
+	survivors := make([]*Proxy, 0, len(res))
+	for _, r := range res {
+		if r.OK {
+			survivors = append(survivors, r.Proxy)
+		}
+	}
+	if len(survivors) == 0 {
+		return proxyPtrs(all)
+	}
+	return survivors
+}
+
+func codesFrom(res []ProbeResult) []int {
+	codes := make([]int, len(res))
+	for i, r := range res {
+		codes[i] = r.Status
+	}
+	return codes
+}
+
+// Эвристика «выбор по различию кодов»: если у соседних proxy разные коды
+// ответа — выбираем proxy с уникальным кодом. Чистая функция.
+func differenceFallback(proxies []*Proxy, codes []int) (string, bool) {
+	if len(proxies) <= 1 {
+		return "", false
+	}
+	idx := len(proxies) - 1
+	for i := len(proxies) - 1; i > 0; i-- {
+		if codes[i] == codes[i-1] {
+			idx--
+			if i != 1 || len(proxies) == len(cfg.Proxies) || (codes[i] == 403 && i == 1) {
+				continue
+			}
+		}
+		if idx != len(proxies)-1 {
+			return proxies[idx].URL, true
+		}
+	}
+	return "", false
+}
+
 // Ищем рабочий апстрим для домена и кэшируем для всех поддоменов
 func findWorkingProxy(domain string) (string, bool) {
 	mainDom := mainDomain(domain)
@@ -213,33 +295,8 @@ func findWorkingProxy(domain string) (string, bool) {
 	}
 	cacheMu.RUnlock()
 
-	okResults := make([]bool, len(cfg.Proxies))
-
-	var wg sync.WaitGroup
-	for i := range cfg.Proxies {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			ok, _ := checkProxy(cfg.Proxies[i].ParsedURL, domain, "PUT")
-			okResults[i] = ok
-		}(i)
-	}
-
-	wg.Wait()
-
-	localProxies := make([]*Proxy, 0, len(cfg.Proxies))
-
-	for i := range cfg.Proxies {
-		if okResults[i] {
-			localProxies = append(localProxies, &cfg.Proxies[i])
-		}
-	}
-
-	if len(localProxies) == 0 {
-		for i := range cfg.Proxies {
-			localProxies = append(localProxies, &cfg.Proxies[i])
-		}
-	}
+	putRes := probeAll(proxyPtrs(cfg.Proxies), domain, "PUT")
+	localProxies := survivorsOrAll(putRes, cfg.Proxies)
 
 	domCh, domLoaded := getOrCreateChannel(domain)
 	if !domLoaded {
@@ -268,28 +325,14 @@ func findWorkingProxy(domain string) (string, bool) {
 			}(mainDom, ch)
 		}
 
-		// Проверяем апстримы для поддомена
-		// for _, proxy := range localProxies {
-		// 	if ok, _ := checkProxy(proxy, domain, "HEAD"); ok {
-		// 		cacheMu.Lock()
-		// 		cache[mainDom] = proxy
-		// 		cacheMu.Unlock()
-		// 		log.Printf("Updated proxy %s for domain %s based on working subdomain %s via HEAD", proxy.URL, mainDom, domain)
-		// 		return proxy, true
-		// 	}
-		// }
-
-		// Если все HEAD провалились - пробуем GET
-		codes := make([]int, len(localProxies))
-		for i, proxy := range localProxies {
-			ok, code := checkProxy(proxy.ParsedURL, domain, "GET")
-			codes[i] = code
-			if ok {
+		getRes := probeAll(localProxies, domain, "GET")
+		for _, r := range getRes {
+			if r.OK {
 				cacheMu.Lock()
-				cache[mainDom] = proxy.URL
+				cache[mainDom] = r.Proxy.URL
 				cacheMu.Unlock()
-				log.Printf("Updated proxy %s for domain %s based on working subdomain %s via GET", proxy.URL, mainDom, domain)
-				return proxy.URL, true
+				log.Printf("Updated proxy %s for domain %s based on working subdomain %s via GET", r.Proxy.URL, mainDom, domain)
+				return r.Proxy.URL, true
 			}
 		}
 
@@ -307,24 +350,12 @@ func findWorkingProxy(domain string) (string, bool) {
 			cacheMu.RUnlock()
 		}
 
-		if len(localProxies) > 1 {
-			idx := len(localProxies) - 1
-			for i := len(localProxies) - 1; i > 0; i-- {
-				if codes[i] == codes[i-1] {
-					idx--
-					if i != 1 || len(localProxies) == len(cfg.Proxies) || (codes[i] == 403 && i == 1) {
-						continue
-					}
-				}
-				if idx != len(localProxies)-1 {
-					cacheMu.Lock()
-					cache[mainDom] = localProxies[idx].URL
-					cacheMu.Unlock()
-					log.Printf("Updated proxy %s for domain %s based on response difference", localProxies[idx].URL, mainDom)
-					return localProxies[idx].URL, true
-				}
-
-			}
+		if pick, ok := differenceFallback(localProxies, codesFrom(getRes)); ok {
+			cacheMu.Lock()
+			cache[mainDom] = pick
+			cacheMu.Unlock()
+			log.Printf("Updated proxy %s for domain %s based on response difference", pick, mainDom)
+			return pick, true
 		}
 
 	} else {
@@ -357,60 +388,25 @@ func getOrCreateChannel(mainDom string) (chan struct{}, bool) {
 // Функция проверки главного домена
 func checkMainDomain(mainDom string, mainDomainProxies []*Proxy) {
 	log.Printf("Starting background mainDom check for %s", mainDom)
-	localProxies := make([]*Proxy, 0, len(mainDomainProxies))
 
-	for _, proxy := range mainDomainProxies {
-		ok, _ := checkProxy(proxy.ParsedURL, mainDom, "PUT")
-		if ok {
-			localProxies = append(localProxies, proxy)
-		}
-	}
+	putRes := probeAll(mainDomainProxies, mainDom, "PUT")
+	localProxies := survivorsOrAll(putRes, cfg.Proxies)
 
-	if len(localProxies) == 0 {
-		for i := range cfg.Proxies {
-			localProxies = append(localProxies, &cfg.Proxies[i])
-		}
-	}
-	// Проверяем основной домен
-	// for _, proxy := range localProxies {
-	// 	if ok, _ := checkProxy(proxy, mainDom, "HEAD"); ok {
-	// 		cacheMu.Lock()
-	// 		cache[mainDom] = proxy
-	// 		cacheMu.Unlock()
-	// 		log.Printf("Selected proxy %s for domain %s and all its subdomains via HEAD", proxy, mainDom)
-	// 		return
-	// 	}
-	// }
-	codes := make([]int, len(localProxies))
-
-	// 2. Если все HEAD провалились - пробуем GET
-	for i, proxy := range localProxies {
-		ok, code := checkProxy(proxy.ParsedURL, mainDom, "GET")
-		codes[i] = code
-		if ok {
+	getRes := probeAll(localProxies, mainDom, "GET")
+	for _, r := range getRes {
+		if r.OK {
 			cacheMu.Lock()
-			cache[mainDom] = proxy.URL
+			cache[mainDom] = r.Proxy.URL
 			cacheMu.Unlock()
-			log.Printf("Selected proxy %s for domain %s and all its subdomains via GET", proxy.URL, mainDom)
+			log.Printf("Selected proxy %s for domain %s and all its subdomains via GET", r.Proxy.URL, mainDom)
 			return
 		}
 	}
-	if len(localProxies) > 1 {
-		idx := len(localProxies) - 1
-		for i := len(localProxies) - 1; i > 0; i-- {
-			if codes[i] == codes[i-1] {
-				idx--
-				if i != 1 || len(localProxies) == len(cfg.Proxies) || (codes[i] == 403 && i == 1) {
-					continue
-				}
-			}
-			if idx != len(localProxies)-1 {
-				cacheMu.Lock()
-				cache[mainDom] = localProxies[idx].URL
-				cacheMu.Unlock()
-				log.Printf("Updated proxy %s for domain %s and all its subdomains based on response difference", localProxies[idx].URL, mainDom)
-				return
-			}
-		}
+
+	if pick, ok := differenceFallback(localProxies, codesFrom(getRes)); ok {
+		cacheMu.Lock()
+		cache[mainDom] = pick
+		cacheMu.Unlock()
+		log.Printf("Updated proxy %s for domain %s and all its subdomains based on response difference", pick, mainDom)
 	}
 }
