@@ -5,14 +5,15 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"errors"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
+	"golang.org/x/sync/errgroup"
 )
 
 type StatusError int
@@ -119,7 +120,7 @@ func makeRequest(client *http.Client, req *http.Request, proxyURL *url.URL, targ
 }
 
 // Проверка доступности прокси через target
-func checkProxy(proxyURL *url.URL, target string, method string) (ok bool, status int) {
+func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method string) (ok bool, status int) {
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -160,7 +161,7 @@ func checkProxy(proxyURL *url.URL, target string, method string) (ok bool, statu
 		return true, 0
 	}
 
-	baseReq, err := http.NewRequest(method, "https://"+target, nil)
+	baseReq, err := http.NewRequestWithContext(ctx, method, "https://"+target, nil)
 	if err != nil {
 		return false, 0
 	}
@@ -200,27 +201,30 @@ func checkProxy(proxyURL *url.URL, target string, method string) (ok bool, statu
 	return true, status
 }
 
-func checkProxyAsync(p *Proxy, domain string, method string) *ProxyResult {
+func checkProxyAsync(ctx context.Context, p *Proxy, domain string, method string) *ProxyResult {
 	res := &ProxyResult{
 		Proxy: p,
 		Ready: make(chan struct{}),
 	}
 
 	go func() {
-		res.OK, res.Status = checkProxy(p.ParsedURL, domain, method)
+		res.OK, res.Status = checkProxy(ctx, p.ParsedURL, domain, method)
 		close(res.Ready)
 	}()
 
 	return res
 }
 
-// Получаем основной домен из хоста (например, sub.example.com -> example.com)
+// Получаем основной домен из хоста (например, sub.example.com -> example.com, sub.example.co.uk -> example.co.uk)
 func mainDomain(host string) string {
-	parts := strings.Split(host, ".")
-	if len(parts) >= 2 {
-		return parts[len(parts)-2] + "." + parts[len(parts)-1]
+	if net.ParseIP(host) != nil {
+		return host
 	}
-	return host
+	mainDomain, err := publicsuffix.EffectiveTLDPlusOne(host)
+	if err != nil {
+		return host
+	}
+	return mainDomain
 }
 
 // Ищем рабочий апстрим для домена и кэшируем для всех поддоменов
@@ -245,7 +249,7 @@ func findWorkingProxy(domain string) (string, bool) {
 		return proxy, true
 	}
 	if !ok && okMain {
-		runCheck(domain, proxies)
+		go runCheckSubdomain(domain, proxyMain, proxies)
 		return proxyMain, true
 	}
 	if !ok && !okMain {
@@ -295,18 +299,13 @@ func closeChannel(domain string) {
 	if domain == "" {
 		return
 	}
-
-	val, ok := inProgress.LoadAndDelete(domain)
+	val, ok := inProgress.Load(domain)
 	if !ok {
 		return
 	}
-
-	ch, ok := val.(chan struct{})
-	if !ok {
-		return
-	}
-
+	ch, _ := val.(chan struct{})
 	close(ch)
+	inProgress.CompareAndDelete(domain, ch)
 }
 
 func runCheck(domain string, proxies []*Proxy) chan struct{} {
@@ -322,12 +321,29 @@ func runCheck(domain string, proxies []*Proxy) chan struct{} {
 	return ch
 }
 
+func runCheckSubdomain(domain string, proxy string, proxies []*Proxy) {
+	for _, p := range proxies {
+		if p.URL == proxy {
+			<-runCheck(domain, []*Proxy{p})
+			cacheMu.RLock()
+			_, ok := cache[domain]
+			cacheMu.RUnlock()
+			if ok {
+				return
+			}
+			break
+		}
+	}
+	<-runCheck(domain, proxies)
+}
+
 // Функция проверки главного домена
 func checkDomain(domain string, proxies []*Proxy) {
 	localProxies := make([]*Proxy, 0, len(proxies))
 	results := make([]*ProxyResult, 0, len(proxies))
+	ctx := context.WithoutCancel(context.Background())
 	for _, proxy := range proxies {
-		results = append(results, checkProxyAsync(proxy, domain, "PUT"))
+		results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
 	}
 	for _, r := range results {
 		<-r.Ready
@@ -353,13 +369,16 @@ func checkDomain(domain string, proxies []*Proxy) {
 
 	// 2. Если все HEAD провалились - пробуем GET
 	results = make([]*ProxyResult, 0, len(localProxies))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	for _, proxy := range localProxies {
-		results = append(results, checkProxyAsync(proxy, domain, "GET"))
+		results = append(results, checkProxyAsync(ctx, proxy, domain, "GET"))
 	}
 	for i, r := range results {
 		<-r.Ready
 		codes[i] = r.Status
 		if r.OK {
+			cancel()
 			cacheMu.Lock()
 			cache[domain] = r.Proxy.URL
 			cacheMu.Unlock()
@@ -387,7 +406,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 		}
 	}
 	mainDom := mainDomain(domain)
-	if domain != mainDom {
+	if domain != mainDom && len(proxies) != 1 {
 		// --- Проверяем кэш ---
 		cacheMu.RLock()
 		if proxy, ok := cache[mainDom]; ok {
