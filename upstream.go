@@ -5,15 +5,14 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"errors"
+	"golang.org/x/net/publicsuffix"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"time"
-
-	"golang.org/x/net/publicsuffix"
-	"golang.org/x/sync/errgroup"
 )
 
 type StatusError int
@@ -126,21 +125,21 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
 			DialContext: (&net.Dialer{
-				Timeout: 1 * time.Second,
+				Timeout: time.Duration(cfg.Timeouts.CheckProxy.DialContext) * time.Millisecond,
 			}).DialContext,
-			TLSHandshakeTimeout:   1800 * time.Millisecond,
-			ResponseHeaderTimeout: 2500 * time.Millisecond,
-			ExpectContinueTimeout: 500 * time.Millisecond,
+			TLSHandshakeTimeout:   time.Duration(cfg.Timeouts.CheckProxy.TLSHandshakeTimeout) * time.Millisecond,
+			ResponseHeaderTimeout: time.Duration(cfg.Timeouts.CheckProxy.ResponseHeaderTimeout) * time.Millisecond,
+			ExpectContinueTimeout: time.Duration(cfg.Timeouts.CheckProxy.ExpectContinueTimeout) * time.Millisecond,
 			DisableCompression:    true,
 			TLSClientConfig: &tls.Config{
 				RootCAs: certPool,
 			},
 		},
-		Timeout: 3000 * time.Millisecond,
+		Timeout: time.Duration(cfg.Timeouts.CheckProxy.Timeout) * time.Millisecond,
 	}
 
 	if method == "PUT" {
-		ctx, cancel := context.WithTimeout(context.Background(), 3000*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Timeouts.CheckProxy.Timeout)*time.Millisecond)
 		defer cancel()
 
 		err := dpiUploadProbe(
@@ -148,9 +147,9 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 			client,
 			"https://"+target,
 			target,
-			128*1024,
-			16*4096,
-			8*time.Millisecond,
+			cfg.DPI.UploadProbe.TotalSizeKB,
+			cfg.DPI.UploadProbe.ChunkSizeKB,
+			time.Duration(cfg.DPI.UploadProbe.DelayMS)*time.Millisecond,
 		)
 
 		if err != nil {
@@ -235,47 +234,43 @@ func findWorkingProxy(domain string) (string, bool) {
 		proxies[i] = &cfg.Proxies[i]
 	}
 	// --- Проверяем кэш ---
-	cacheMu.RLock()
-	proxy, ok := cache[domain]
-	proxyMain, okMain := cache[mainDom]
-	cacheMu.RUnlock()
-	if ok && okMain {
-		return proxy, true
+	res := cacheGet(domain)
+	resMain := cacheGet(mainDom)
+	defer func() {
+		if res.Expired {
+			go runCheckSubdomain(domain, res.Value, proxies)
+		}
+		if resMain.Expired && domain != mainDom {
+			go runCheckSubdomain(domain, res.Value, proxies)
+		}
+	}()
+	if res.Found && resMain.Found {
+		return res.Value, true
 	}
-	if ok && !okMain {
-		cacheMu.Lock()
-		cache[mainDom] = proxy
-		cacheMu.Unlock()
-		return proxy, true
+	if res.Found && !resMain.Found {
+		cacheSet(mainDom, res.Value)
+		return res.Value, true
 	}
-	if !ok && okMain {
-		go runCheckSubdomain(domain, proxyMain, proxies)
-		return proxyMain, true
+	if !res.Found && resMain.Found {
+		go runCheckSubdomain(domain, resMain.Value, proxies)
+		return resMain.Value, true
 	}
-	if !ok && !okMain {
+	if !res.Found && !resMain.Found {
 		if domain != mainDom {
 			chMain := runCheck(mainDom, proxies)
 			ch := runCheck(domain, proxies)
 			<-chMain
 			<-ch
-			cacheMu.RLock()
-			if proxy, ok := cache[domain]; ok {
-				cacheMu.RUnlock()
-				return proxy, true
-			} else if proxy, ok := cache[mainDom]; ok {
-				cacheMu.RUnlock()
-				return proxy, true
-			}
-			cacheMu.RUnlock()
 		} else {
 			ch := runCheck(domain, proxies)
 			<-ch
-			cacheMu.RLock()
-			if proxy, ok := cache[domain]; ok {
-				cacheMu.RUnlock()
-				return proxy, true
-			}
-			cacheMu.RUnlock()
+		}
+		if res := cacheGet(domain); res.Found {
+			return res.Value, true
+		}
+
+		if res := cacheGet(mainDom); res.Found {
+			return res.Value, true
 		}
 	}
 	// fallback на последний
@@ -308,7 +303,35 @@ func closeChannel(domain string) {
 	inProgress.CompareAndDelete(domain, ch)
 }
 
+func filterProxies(domain string, proxies []*Proxy) []*Proxy {
+	filtered := make([]*Proxy, 0, len(proxies))
+
+	for _, p := range proxies {
+		if p == nil {
+			continue
+		}
+
+		skip := false
+		for _, re := range p.compiled {
+			if re.MatchString(domain) {
+				log.Printf("Proxy %s skipped for domain %s (blacklist match: %s)", p.URL, domain, re.String())
+				skip = true
+				break
+			}
+		}
+
+		if skip {
+			continue
+		}
+
+		filtered = append(filtered, p)
+	}
+
+	return filtered
+}
+
 func runCheck(domain string, proxies []*Proxy) chan struct{} {
+	proxies = filterProxies(domain, proxies)
 	ch, loaded := getOrCreateChannel(domain)
 
 	if !loaded {
@@ -322,13 +345,12 @@ func runCheck(domain string, proxies []*Proxy) chan struct{} {
 }
 
 func runCheckSubdomain(domain string, proxy string, proxies []*Proxy) {
+	proxies = filterProxies(domain, proxies)
 	for _, p := range proxies {
 		if p.URL == proxy {
 			<-runCheck(domain, []*Proxy{p})
-			cacheMu.RLock()
-			_, ok := cache[domain]
-			cacheMu.RUnlock()
-			if ok {
+
+			if res := cacheGet(domain); res.Found {
 				return
 			}
 			break
@@ -337,7 +359,7 @@ func runCheckSubdomain(domain string, proxy string, proxies []*Proxy) {
 	<-runCheck(domain, proxies)
 }
 
-// Функция проверки главного домена
+// Функция проверки домена
 func checkDomain(domain string, proxies []*Proxy) {
 	localProxies := make([]*Proxy, 0, len(proxies))
 	results := make([]*ProxyResult, 0, len(proxies))
@@ -379,9 +401,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 		codes[i] = r.Status
 		if r.OK {
 			cancel()
-			cacheMu.Lock()
-			cache[domain] = r.Proxy.URL
-			cacheMu.Unlock()
+			cacheSet(domain, r.Proxy.URL)
 			log.Printf("Selected proxy %s for domain %s via GET", r.Proxy.URL, domain)
 			return
 		}
@@ -397,9 +417,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 				}
 			}
 			if idx != len(localProxies)-1 {
-				cacheMu.Lock()
-				cache[domain] = localProxies[idx].URL
-				cacheMu.Unlock()
+				cacheSet(domain, localProxies[idx].URL)
 				log.Printf("Updated proxy %s for domain %s based on response difference", localProxies[idx].URL, domain)
 				return
 			}
@@ -407,17 +425,11 @@ func checkDomain(domain string, proxies []*Proxy) {
 	}
 	mainDom := mainDomain(domain)
 	if domain != mainDom && len(proxies) != 1 {
-		// --- Проверяем кэш ---
-		cacheMu.RLock()
-		if proxy, ok := cache[mainDom]; ok {
-			cacheMu.RUnlock()
-			cacheMu.Lock()
-			cache[domain] = proxy
-			cacheMu.Unlock()
-			log.Printf("Updated proxy %s for domain %s based on mainDomain", proxy, domain)
+		if res := cacheGet(mainDom); res.Found {
+			cacheSet(domain, res.Value)
+			log.Printf("Updated proxy %s for domain %s based on mainDomain", res.Value, domain)
 			return
 		}
-		cacheMu.RUnlock()
 	}
 
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/x509"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,8 +12,13 @@ import (
 	"time"
 )
 
+type CacheEntry struct {
+	Value     string
+	CreatedAt time.Time
+}
+
 var (
-	cache      = make(map[string]string) // main domain -> upstream proxy
+	cache      = make(map[string]CacheEntry) // main domain -> upstream proxy
 	userCache  = make(map[string]string)
 	cacheMu    sync.RWMutex
 	inProgress sync.Map // key: domain, value: chan struct{}
@@ -69,51 +73,6 @@ func loadCerts(dir string) *x509.CertPool {
 	return pool
 }
 
-// Сохраняем кэш на диск
-func saveCache() {
-	cacheMu.RLock()
-	defer cacheMu.RUnlock()
-	f, err := os.Create(cfg.Server.CacheFile)
-	if err != nil {
-		log.Println("Failed to save cache:", err)
-		return
-	}
-	defer f.Close()
-	json.NewEncoder(f).Encode(cache)
-}
-
-// Загружаем кэш с диска
-func loadCache() {
-	f, err := os.Open(cfg.Server.CacheFile)
-	if err != nil {
-		log.Println("No cache file found, starting fresh")
-	} else {
-		defer f.Close()
-		json.NewDecoder(f).Decode(&cache)
-		log.Println("Loaded cache from disk")
-	}
-
-	uf, err := os.Open(cfg.Server.UserCacheFile)
-	if err != nil {
-		log.Println("user.json not found, skipping")
-		return
-	}
-	defer uf.Close()
-
-	if err := json.NewDecoder(uf).Decode(&userCache); err != nil {
-		log.Printf("Failed to decode user.json: %v", err)
-		return
-	}
-
-	// Объединяем: данные из user.json имеют приоритет
-	for k, v := range userCache {
-		cache[k] = v
-	}
-
-	log.Printf("Cache loaded. Total entries after merging: %d", len(cache))
-
-}
-
 func main() {
 	cfg, err := LoadConfig("config.yml")
 	if err != nil {
@@ -127,9 +86,22 @@ func main() {
 	certPool = loadCerts(cfg.Server.CertPath)
 
 	go func() {
+		ticker := time.NewTicker(cfg.Cache.SaveTime)
+		defer ticker.Stop()
+
 		for {
-			time.Sleep(time.Duration(cfg.Server.CacheSaveTimeSec) * time.Second)
+			<-ticker.C
 			saveCache()
+		}
+	}()
+
+	go func() {
+		ticker := time.NewTicker(cfg.Cache.CleanupInterval)
+		defer ticker.Stop()
+
+		for {
+			<-ticker.C
+			cacheCleanup(cfg.Cache.MaxAge)
 		}
 	}()
 

@@ -6,6 +6,8 @@ import (
 	"gopkg.in/yaml.v3"
 	"net/url"
 	"os"
+	"regexp"
+	"time"
 )
 
 //go:embed default.yml
@@ -19,22 +21,23 @@ type Config struct {
 	Timeouts  Timeouts     `yaml:"timeouts"`
 	DPI       DPIConfig    `yaml:"dpi"`
 	UserAgent string       `yaml:"userAgent"`
+	Cache     Cache        `yaml:"cache"`
 }
 
 type ServerConfig struct {
-	Host             string   `yaml:"host"`
-	Port             int      `yaml:"port"`
-	CacheSaveTimeSec int      `yaml:"cacheSaveTimeSec"`
-	CertPath         string   `yaml:"certPath"`
-	CacheFile        string   `yaml:"cacheFile"`
-	UserCacheFile    string   `yaml:"userCacheFile"`
-	CheckMethods     []string `yaml:"checkMethods"`
+	Host          string   `yaml:"host"`
+	Port          int      `yaml:"port"`
+	CertPath      string   `yaml:"certPath"`
+	CacheFile     string   `yaml:"cacheFile"`
+	UserCacheFile string   `yaml:"userCacheFile"`
+	CheckMethods  []string `yaml:"checkMethods"`
 }
 
 type Proxy struct {
-	URL       string   `yaml:"url"`
-	ParsedURL *url.URL `yaml:"-"`
-	Blacklist []string `yaml:"blacklist"`
+	URL       string           `yaml:"url"`
+	ParsedURL *url.URL         `yaml:"-"`
+	Blacklist []string         `yaml:"blacklist"`
+	compiled  []*regexp.Regexp `yaml:"-"`
 }
 
 type Timeouts struct {
@@ -46,6 +49,7 @@ type CheckProxyTimeouts struct {
 	TLSHandshakeTimeout   int `yaml:"TLSHandshakeTimeout"`   // ms
 	ResponseHeaderTimeout int `yaml:"responseHeaderTimeout"` // ms
 	ExpectContinueTimeout int `yaml:"expectContinueTimeout"` // ms
+	DialContext           int `yaml:"dialContext"`           // ms
 	Timeout               int `yaml:"timeout"`               // ms
 }
 
@@ -63,6 +67,13 @@ type UploadProbe struct {
 	TotalSizeKB int `yaml:"totalSizeKB"`
 	ChunkSizeKB int `yaml:"chunkSizeKB"`
 	DelayMS     int `yaml:"delayMS"`
+}
+
+type Cache struct {
+	TTL             time.Duration `yaml:"ttl"`
+	MaxAge          time.Duration `yaml:"maxAge"`
+	SaveTime        time.Duration `yaml:"saveTime"`
+	CleanupInterval time.Duration `yaml:"cleanupInterval"`
 }
 
 // ---------------- LOAD ----------------
@@ -114,6 +125,14 @@ func validateConfig(c *Config) error {
 			return fmt.Errorf("proxy[%d] invalid url %q: %w", i, p.URL, err)
 		}
 		cfg.Proxies[i].ParsedURL = u
+
+		for _, pattern := range p.Blacklist {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return fmt.Errorf("proxy[%d] invalid blacklist regex %q: %w", i, pattern, err)
+			}
+			p.compiled = append(p.compiled, re)
+		}
 	}
 
 	if c.DPI.RetryAttempts < 0 {

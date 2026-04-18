@@ -1,7 +1,6 @@
 server:
   host: ""
   port: 9990
-  cacheSaveTimeSec: 300
   certPath: certs
   cacheFile: cache/cache.json
   userCacheFile: cache/user.json
@@ -22,6 +21,7 @@ timeouts:
     TLSHandshakeTimeout: 1800
     responseHeaderTimeout: 2500
     expectContinueTimeout: 500
+    dialContext: 1000
     timeout: 3000
   clientConnection:
     timeout: 30000
@@ -34,5 +34,11 @@ dpi:
     chunkSizeKB: 64
     delayMS: 8
   retryAttempts: 6
+
+cache:
+  ttl: 2h
+  maxAge: 240h
+  saveTime: 5m
+  cleanupInterval: 12h
 
 userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"

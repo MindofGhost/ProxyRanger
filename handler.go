@@ -64,8 +64,8 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 
 		// Dial с keepalive
 		dialer := net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
+			Timeout:   time.Duration(cfg.Timeouts.ClientConnection.Timeout) * time.Millisecond,
+			KeepAlive: time.Duration(cfg.Timeouts.ClientConnection.KeepAlive) * time.Millisecond,
 		}
 
 		upstreamConn, err := dialer.Dial("tcp", upURL.Host)
@@ -79,11 +79,11 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 		// Включаем TCP keepalive
 		if tcp, ok := upstreamConn.(*net.TCPConn); ok {
 			tcp.SetKeepAlive(true)
-			tcp.SetKeepAlivePeriod(30 * time.Second)
+			tcp.SetKeepAlivePeriod(time.Duration(cfg.Timeouts.ClientConnection.KeepAlive) * time.Millisecond)
 		}
 		if tcp, ok := clientConn.(*net.TCPConn); ok {
 			tcp.SetKeepAlive(true)
-			tcp.SetKeepAlivePeriod(30 * time.Second)
+			tcp.SetKeepAlivePeriod(time.Duration(cfg.Timeouts.ClientConnection.KeepAlive) * time.Millisecond)
 		}
 
 		// Отправляем CONNECT на upstream
