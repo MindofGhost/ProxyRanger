@@ -325,7 +325,7 @@ func runCheck(domain string, proxies []*Proxy) chan struct{} {
 // Функция проверки главного домена
 func checkDomain(domain string, proxies []*Proxy) {
 	localProxies := make([]*Proxy, 0, len(proxies))
-	results := make([]*ProxyResult, 0, len(localProxies))
+	results := make([]*ProxyResult, 0, len(proxies))
 	for _, proxy := range proxies {
 		results = append(results, checkProxyAsync(proxy, domain, "PUT"))
 	}
@@ -337,9 +337,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 	}
 
 	if len(localProxies) == 0 {
-		for i := range cfg.Proxies {
-			localProxies[i] = &cfg.Proxies[i]
-		}
+		localProxies = proxies
 	}
 	// Проверяем основной домен
 	// for _, proxy := range localProxies {
