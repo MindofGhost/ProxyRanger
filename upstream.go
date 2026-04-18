@@ -228,7 +228,7 @@ func findWorkingProxy(domain string) (string, bool) {
 	mainDom := mainDomain(domain)
 	proxies := make([]*Proxy, len(cfg.Proxies))
 	for i := range cfg.Proxies {
-		proxies = append(proxies, &cfg.Proxies[i])
+		proxies[i] = &cfg.Proxies[i]
 	}
 	// --- Проверяем кэш ---
 	cacheMu.RLock()
@@ -250,7 +250,7 @@ func findWorkingProxy(domain string) (string, bool) {
 	}
 	if !ok && !okMain {
 		if domain != mainDom {
-			chMain := runCheck(domain, proxies)
+			chMain := runCheck(mainDom, proxies)
 			ch := runCheck(domain, proxies)
 			<-chMain
 			<-ch
@@ -338,7 +338,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 
 	if len(localProxies) == 0 {
 		for i := range cfg.Proxies {
-			localProxies = append(localProxies, &cfg.Proxies[i])
+			localProxies[i] = &cfg.Proxies[i]
 		}
 	}
 	// Проверяем основной домен
@@ -354,6 +354,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 	codes := make([]int, len(localProxies))
 
 	// 2. Если все HEAD провалились - пробуем GET
+	results = make([]*ProxyResult, 0, len(localProxies))
 	for _, proxy := range proxies {
 		results = append(results, checkProxyAsync(proxy, domain, "GET"))
 	}
