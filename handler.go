@@ -22,7 +22,7 @@ func copyHeader(dst, src http.Header) {
 
 // Основной обработчик HTTP и HTTPS
 func handleConnection(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Incoming request: %s %s Host: %s\n", r.Method, r.URL, r.Host)
+	// log.Printf("Incoming request: %s %s Host: %s\n", r.Method, r.URL, r.Host)
 
 	if r.Method == http.MethodConnect {
 		hj, ok := w.(http.Hijacker)
@@ -121,7 +121,7 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		log.Printf("Tunnel established: %s <-> %s", clientConn.RemoteAddr(), target)
+		// log.Printf("Tunnel established: %s <-> %s", clientConn.RemoteAddr(), target)
 
 		// Двунаправленное копирование с корректным закрытием
 		done := make(chan struct{}, 2)
@@ -149,7 +149,7 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 		upstreamConn.Close()
 		clientConn.Close()
 
-		log.Printf("Tunnel closed: %s", target)
+		// log.Printf("Tunnel closed: %s", target)
 		return
 	}
 	// HTTP GET/POST
