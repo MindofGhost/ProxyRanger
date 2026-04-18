@@ -17,7 +17,7 @@ var (
 	cache      = make(map[string]string) // main domain -> upstream proxy
 	userCache  = make(map[string]string)
 	cacheMu    sync.RWMutex
-	inProgress sync.Map // key: mainDom, value: chan struct{}
+	inProgress sync.Map // key: domain, value: chan struct{}
 	certPool   *x509.CertPool
 	cfg        Config
 )

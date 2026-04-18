@@ -12,11 +12,18 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
 type StatusError int
+
+type ProxyResult struct {
+	Proxy  *Proxy
+	Status int
+	OK     bool
+
+	Ready chan struct{}
+}
 
 func (e StatusError) Error() string { return "" }
 
@@ -193,6 +200,20 @@ func checkProxy(proxyURL *url.URL, target string, method string) (ok bool, statu
 	return true, status
 }
 
+func checkProxyAsync(p *Proxy, domain string, method string) *ProxyResult {
+	res := &ProxyResult{
+		Proxy: p,
+		Ready: make(chan struct{}),
+	}
+
+	go func() {
+		res.OK, res.Status = checkProxy(p.ParsedURL, domain, method)
+		close(res.Ready)
+	}()
+
+	return res
+}
+
 // Получаем основной домен из хоста (например, sub.example.com -> example.com)
 func mainDomain(host string) string {
 	parts := strings.Split(host, ".")
@@ -205,137 +226,53 @@ func mainDomain(host string) string {
 // Ищем рабочий апстрим для домена и кэшируем для всех поддоменов
 func findWorkingProxy(domain string) (string, bool) {
 	mainDom := mainDomain(domain)
+	proxies := make([]*Proxy, len(cfg.Proxies))
+	for i := range cfg.Proxies {
+		proxies = append(proxies, &cfg.Proxies[i])
+	}
 	// --- Проверяем кэш ---
 	cacheMu.RLock()
-	if proxy, ok := cache[mainDom]; ok {
-		cacheMu.RUnlock()
+	proxy, ok := cache[domain]
+	proxyMain, okMain := cache[mainDom]
+	cacheMu.RUnlock()
+	if ok && okMain {
 		return proxy, true
 	}
-	cacheMu.RUnlock()
-
-	okResults := make([]bool, len(cfg.Proxies))
-
-	var wg sync.WaitGroup
-	for i := range cfg.Proxies {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			ok, _ := checkProxy(cfg.Proxies[i].ParsedURL, domain, "PUT")
-			okResults[i] = ok
-		}(i)
+	if ok && !okMain {
+		cacheMu.Lock()
+		cache[mainDom] = proxy
+		cacheMu.Unlock()
+		return proxy, true
 	}
-
-	wg.Wait()
-
-	localProxies := make([]*Proxy, 0, len(cfg.Proxies))
-
-	for i := range cfg.Proxies {
-		if okResults[i] {
-			localProxies = append(localProxies, &cfg.Proxies[i])
-		}
+	if !ok && okMain {
+		runCheck(domain, proxies)
+		return proxyMain, true
 	}
-
-	if len(localProxies) == 0 {
-		for i := range cfg.Proxies {
-			localProxies = append(localProxies, &cfg.Proxies[i])
-		}
-	}
-
-	domCh, domLoaded := getOrCreateChannel(domain)
-	if !domLoaded {
-		defer func() {
-			close(domCh)
-			inProgress.Delete(domain)
-		}()
-
-		chNeeded := domain != mainDom && net.ParseIP(domain) == nil
-		ch, loaded := getOrCreateChannel(func() string {
-			if chNeeded {
-				return mainDom
-			} else {
-				return ""
-			}
-		}())
-
-		if chNeeded && !loaded {
-			// Мы первые - запускаем проверку mainDom в фоне
-			go func(mainDom string, ch chan struct{}) {
-				defer func() {
-					close(ch)
-					inProgress.Delete(mainDom)
-				}()
-				checkMainDomain(mainDom, localProxies)
-			}(mainDom, ch)
-		}
-
-		// Проверяем апстримы для поддомена
-		// for _, proxy := range localProxies {
-		// 	if ok, _ := checkProxy(proxy, domain, "HEAD"); ok {
-		// 		cacheMu.Lock()
-		// 		cache[mainDom] = proxy
-		// 		cacheMu.Unlock()
-		// 		log.Printf("Updated proxy %s for domain %s based on working subdomain %s via HEAD", proxy.URL, mainDom, domain)
-		// 		return proxy, true
-		// 	}
-		// }
-
-		// Если все HEAD провалились - пробуем GET
-		codes := make([]int, len(localProxies))
-		for i, proxy := range localProxies {
-			ok, code := checkProxy(proxy.ParsedURL, domain, "GET")
-			codes[i] = code
-			if ok {
-				cacheMu.Lock()
-				cache[mainDom] = proxy.URL
-				cacheMu.Unlock()
-				log.Printf("Updated proxy %s for domain %s based on working subdomain %s via GET", proxy.URL, mainDom, domain)
-				return proxy.URL, true
-			}
-		}
-
-		if chNeeded {
-			log.Printf("No working subdomain proxy for %s, waiting for mainDom check...", domain)
-		}
-		<-ch // ждём завершения фоновой проверки mainDom
-		if chNeeded {
+	if !ok && !okMain {
+		if domain != mainDom {
+			chMain := runCheck(domain, proxies)
+			ch := runCheck(domain, proxies)
+			<-chMain
+			<-ch
 			cacheMu.RLock()
-			if proxy, ok := cache[mainDom]; ok {
+			if proxy, ok := cache[domain]; ok {
 				cacheMu.RUnlock()
-				log.Printf("Using proxy %s for %s after mainDom check", proxy, domain)
+				return proxy, true
+			} else if proxy, ok := cache[mainDom]; ok {
+				cacheMu.RUnlock()
+				return proxy, true
+			}
+			cacheMu.RUnlock()
+		} else {
+			ch := runCheck(domain, proxies)
+			<-ch
+			cacheMu.RLock()
+			if proxy, ok := cache[domain]; ok {
+				cacheMu.RUnlock()
 				return proxy, true
 			}
 			cacheMu.RUnlock()
 		}
-
-		if len(localProxies) > 1 {
-			idx := len(localProxies) - 1
-			for i := len(localProxies) - 1; i > 0; i-- {
-				if codes[i] == codes[i-1] {
-					idx--
-					if i != 1 || len(localProxies) == len(cfg.Proxies) || (codes[i] == 403 && i == 1) {
-						continue
-					}
-				}
-				if idx != len(localProxies)-1 {
-					cacheMu.Lock()
-					cache[mainDom] = localProxies[idx].URL
-					cacheMu.Unlock()
-					log.Printf("Updated proxy %s for domain %s based on response difference", localProxies[idx].URL, mainDom)
-					return localProxies[idx].URL, true
-				}
-
-			}
-		}
-
-	} else {
-		<-domCh // ждём завершения фоновой проверки другим потоком
-		cacheMu.RLock()
-		if proxy, ok := cache[domain]; ok {
-			cacheMu.RUnlock()
-			log.Printf("Using proxy %s for %s after other stream check", proxy, domain)
-			return proxy, true
-		}
-		cacheMu.RUnlock()
 	}
 	// fallback на последний
 	log.Printf("All proxies failed for %s, falling back to last proxy %s", domain, cfg.Proxies[len(cfg.Proxies)-1].URL)
@@ -343,26 +280,59 @@ func findWorkingProxy(domain string) (string, bool) {
 }
 
 // Функция проверки канала
-func getOrCreateChannel(mainDom string) (chan struct{}, bool) {
-	if mainDom == "" {
+func getOrCreateChannel(domain string) (chan struct{}, bool) {
+	if domain == "" {
 		ch := make(chan struct{})
 		close(ch)
 		return ch, true
 	}
 	ch := make(chan struct{})
-	actual, loaded := inProgress.LoadOrStore(mainDom, ch)
+	actual, loaded := inProgress.LoadOrStore(domain, ch)
 	return actual.(chan struct{}), loaded
 }
 
-// Функция проверки главного домена
-func checkMainDomain(mainDom string, mainDomainProxies []*Proxy) {
-	log.Printf("Starting background mainDom check for %s", mainDom)
-	localProxies := make([]*Proxy, 0, len(mainDomainProxies))
+func closeChannel(domain string) {
+	if domain == "" {
+		return
+	}
 
-	for _, proxy := range mainDomainProxies {
-		ok, _ := checkProxy(proxy.ParsedURL, mainDom, "PUT")
-		if ok {
-			localProxies = append(localProxies, proxy)
+	val, ok := inProgress.LoadAndDelete(domain)
+	if !ok {
+		return
+	}
+
+	ch, ok := val.(chan struct{})
+	if !ok {
+		return
+	}
+
+	close(ch)
+}
+
+func runCheck(domain string, proxies []*Proxy) chan struct{} {
+	ch, loaded := getOrCreateChannel(domain)
+
+	if !loaded {
+		go func() {
+			defer closeChannel(domain)
+			checkDomain(domain, proxies)
+		}()
+	}
+
+	return ch
+}
+
+// Функция проверки главного домена
+func checkDomain(domain string, proxies []*Proxy) {
+	localProxies := make([]*Proxy, 0, len(proxies))
+	results := make([]*ProxyResult, 0, len(localProxies))
+	for _, proxy := range proxies {
+		results = append(results, checkProxyAsync(proxy, domain, "PUT"))
+	}
+	for _, r := range results {
+		<-r.Ready
+		if r.OK {
+			localProxies = append(localProxies, r.Proxy)
 		}
 	}
 
@@ -384,17 +354,21 @@ func checkMainDomain(mainDom string, mainDomainProxies []*Proxy) {
 	codes := make([]int, len(localProxies))
 
 	// 2. Если все HEAD провалились - пробуем GET
-	for i, proxy := range localProxies {
-		ok, code := checkProxy(proxy.ParsedURL, mainDom, "GET")
-		codes[i] = code
-		if ok {
+	for _, proxy := range proxies {
+		results = append(results, checkProxyAsync(proxy, domain, "GET"))
+	}
+	for i, r := range results {
+		<-r.Ready
+		codes[i] = r.Status
+		if r.OK {
 			cacheMu.Lock()
-			cache[mainDom] = proxy.URL
+			cache[domain] = r.Proxy.URL
 			cacheMu.Unlock()
-			log.Printf("Selected proxy %s for domain %s and all its subdomains via GET", proxy.URL, mainDom)
+			log.Printf("Selected proxy %s for domain %s via GET", r.Proxy.URL, domain)
 			return
 		}
 	}
+
 	if len(localProxies) > 1 {
 		idx := len(localProxies) - 1
 		for i := len(localProxies) - 1; i > 0; i-- {
@@ -406,11 +380,26 @@ func checkMainDomain(mainDom string, mainDomainProxies []*Proxy) {
 			}
 			if idx != len(localProxies)-1 {
 				cacheMu.Lock()
-				cache[mainDom] = localProxies[idx].URL
+				cache[domain] = localProxies[idx].URL
 				cacheMu.Unlock()
-				log.Printf("Updated proxy %s for domain %s and all its subdomains based on response difference", localProxies[idx].URL, mainDom)
+				log.Printf("Updated proxy %s for domain %s based on response difference", localProxies[idx].URL, domain)
 				return
 			}
 		}
 	}
+	mainDom := mainDomain(domain)
+	if domain != mainDom {
+		// --- Проверяем кэш ---
+		cacheMu.RLock()
+		if proxy, ok := cache[mainDom]; ok {
+			cacheMu.RUnlock()
+			cacheMu.Lock()
+			cache[domain] = proxy
+			cacheMu.Unlock()
+			log.Printf("Updated proxy %s for domain %s based on mainDomain", proxy, domain)
+			return
+		}
+		cacheMu.RUnlock()
+	}
+
 }
