@@ -116,15 +116,18 @@ func validateConfig(c *Config) error {
 		return fmt.Errorf("no proxies defined")
 	}
 
-	for i, p := range c.Proxies {
+	for i := range c.Proxies {
+		p := &c.Proxies[i]
+
 		if p.URL == "" {
 			return fmt.Errorf("proxy[%d].url is required", i)
 		}
-		u, err := url.Parse(cfg.Proxies[i].URL)
+
+		u, err := url.Parse(p.URL)
 		if err != nil {
 			return fmt.Errorf("proxy[%d] invalid url %q: %w", i, p.URL, err)
 		}
-		cfg.Proxies[i].ParsedURL = u
+		p.ParsedURL = u
 
 		for _, pattern := range p.Blacklist {
 			re, err := regexp.Compile(pattern)
