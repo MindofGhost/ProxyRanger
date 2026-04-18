@@ -353,7 +353,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 
 	// 2. Если все HEAD провалились - пробуем GET
 	results = make([]*ProxyResult, 0, len(localProxies))
-	for _, proxy := range proxies {
+	for _, proxy := range localProxies {
 		results = append(results, checkProxyAsync(proxy, domain, "GET"))
 	}
 	for i, r := range results {
