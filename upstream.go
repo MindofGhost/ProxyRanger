@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -47,7 +48,8 @@ func dpiUploadProbe(
 	req.Host = host
 	req.Header.Set("User-Agent", cfg.UserAgent)
 	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("Expect", "100-continue")
+	// req.Header.Set("Expect", "100-continue")
+	req.ContentLength = int64(bytesTotal)
 
 	go func() {
 		defer pw.Close()
@@ -153,6 +155,13 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 		)
 
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return true, 0
+			}
+
+			if strings.Contains(err.Error(), "use of closed network connection") {
+				return true, 0
+			}
 			log.Printf("PUT <DPI Detected> Remove proxy %s from check for %s. Returned error: %s", proxyURL, target, err)
 			return false, 0
 		}
