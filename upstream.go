@@ -375,12 +375,10 @@ func runCheckSubdomain(domain string, proxy string, proxies []*Proxy) {
 	for _, p := range proxies {
 		if p.URL == proxy {
 			<-runCheck(domain, []*Proxy{p})
-
-			if res := cacheGet(domain); res.Found && !res.Expired {
-				return
-			}
-			break
 		}
+	}
+	if res := cacheGet(domain); res.Found && !res.Expired {
+		return
 	}
 	<-runCheck(domain, proxies)
 }
