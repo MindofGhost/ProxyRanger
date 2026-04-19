@@ -26,6 +26,11 @@ type ProxyResult struct {
 	Ready chan struct{}
 }
 
+type inflightEntry struct {
+	ch      chan struct{}
+	running bool
+}
+
 func (e StatusError) Error() string { return "" }
 
 func dpiUploadProbe(
@@ -294,22 +299,34 @@ func getOrCreateChannel(domain string) (chan struct{}, bool) {
 		close(ch)
 		return ch, true
 	}
-	ch := make(chan struct{})
-	actual, loaded := inProgress.LoadOrStore(domain, ch)
-	return actual.(chan struct{}), loaded
+
+	newEntry := &inflightEntry{
+		ch:      make(chan struct{}),
+		running: true,
+	}
+
+	actual, loaded := inProgress.LoadOrStore(domain, newEntry)
+
+	entry := actual.(*inflightEntry)
+
+	return entry.ch, loaded
 }
 
 func closeChannel(domain string) {
 	if domain == "" {
 		return
 	}
+
 	val, ok := inProgress.Load(domain)
 	if !ok {
 		return
 	}
-	ch, _ := val.(chan struct{})
-	close(ch)
-	inProgress.CompareAndDelete(domain, ch)
+
+	entry := val.(*inflightEntry)
+
+	if inProgress.CompareAndDelete(domain, entry) {
+		close(entry.ch)
+	}
 }
 
 func filterProxies(domain string, proxies []*Proxy) []*Proxy {
