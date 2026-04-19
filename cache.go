@@ -65,7 +65,7 @@ func loadCache() {
 	for k, v := range userCache {
 		cache[k] = CacheEntry{
 			Value:     v,
-			CreatedAt: time.Unix(1<<62, 0), // или другое время
+			CreatedAt: time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC), // или другое время
 		}
 	}
 
