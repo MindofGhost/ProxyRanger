@@ -454,7 +454,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 		}
 	}
 	mainDom := mainDomain(domain)
-	if domain != mainDom && len(proxies) != 1 {
+	if len(proxies) != 1 {
 		if res := cacheGet(mainDom); res.Found {
 			cacheSet(domain, res.Value)
 			log.Printf("Updated proxy %s for domain %s based on mainDomain", res.Value, domain)
