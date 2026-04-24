@@ -404,8 +404,8 @@ func checkDomain(domain string, proxies []*Proxy) {
 			localProxies = proxies
 		} else {
 			log.Printf("All proxy for domain %s failed", domain)
+			return
 		}
-		return
 	}
 	// Проверяем основной домен
 	// for _, proxy := range localProxies {
