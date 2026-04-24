@@ -399,7 +399,12 @@ func checkDomain(domain string, proxies []*Proxy) {
 	}
 
 	if len(localProxies) == 0 {
-		log.Printf("All proxy for domain %s failed", domain)
+		if len(proxies) > 1 {
+			log.Printf("All proxy for domain %s failed in full check. Return proxies back", domain)
+			localProxies = proxies
+		} else {
+			log.Printf("All proxy for domain %s failed", domain)
+		}
 		return
 	}
 	// Проверяем основной домен
