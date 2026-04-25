@@ -51,7 +51,7 @@ func dpiUploadProbe(
 		return err
 	}
 
-	req.Host = host + "/donotexist_test"
+	req.Host = host
 	req.Header.Set("User-Agent", cfg.UserAgent)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	// req.Header.Set("Expect", "100-continue")
