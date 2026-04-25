@@ -59,8 +59,9 @@ type ClientTimeouts struct {
 }
 
 type DPIConfig struct {
-	UploadProbe   UploadProbe `yaml:"uploadProbe"`
-	RetryAttempts int         `yaml:"retryAttempts"`
+	UploadProbe      UploadProbe `yaml:"uploadProbe"`
+	RetryAttempts    int         `yaml:"retryAttempts"`
+	UsePUTinRechecks bool        `yaml:"usePUTinRechecks"`
 }
 
 type UploadProbe struct {

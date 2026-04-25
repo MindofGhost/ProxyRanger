@@ -363,6 +363,7 @@ func runCheck(domain string, proxies []*Proxy) chan struct{} {
 	if !loaded {
 		go func() {
 			defer closeChannel(domain)
+			log.Printf("All proxy for domain %s failed in full check. Return proxies back", domain)
 			checkDomain(domain, proxies)
 		}()
 	}
@@ -389,14 +390,19 @@ func checkDomain(domain string, proxies []*Proxy) {
 	localProxies := make([]*Proxy, 0, len(proxies))
 	results := make([]*ProxyResult, 0, len(proxies))
 	ctx := context.WithoutCancel(context.Background())
-	for _, proxy := range proxies {
-		results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
-	}
-	for _, r := range results {
-		<-r.Ready
-		if r.OK {
-			localProxies = append(localProxies, r.Proxy)
+	if cfg.DPI.UsePUTinRechecks || len(proxies) > 1 {
+		log.Printf("Start PUT check for domain %s", domain)
+		for _, proxy := range proxies {
+			results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
 		}
+		for _, r := range results {
+			<-r.Ready
+			if r.OK {
+				localProxies = append(localProxies, r.Proxy)
+			}
+		}
+	} else {
+		localProxies = proxies
 	}
 
 	if len(localProxies) == 0 {
@@ -424,6 +430,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 	results = make([]*ProxyResult, 0, len(localProxies))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	log.Printf("Start GET check for domain %s", domain)
 	for _, proxy := range localProxies {
 		results = append(results, checkProxyAsync(ctx, proxy, domain, "GET"))
 	}
