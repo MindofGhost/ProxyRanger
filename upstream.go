@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"errors"
-	"golang.org/x/net/publicsuffix"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net"
@@ -14,6 +12,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
+	"golang.org/x/sync/errgroup"
 )
 
 type StatusError int
@@ -45,12 +46,12 @@ func dpiUploadProbe(
 
 	pr, pw := io.Pipe()
 
-	req, err := http.NewRequestWithContext(ctx, "PUT", url, pr)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, pr)
 	if err != nil {
 		return err
 	}
 
-	req.Host = host
+	req.Host = host + "/donotexist_test"
 	req.Header.Set("User-Agent", cfg.UserAgent)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	// req.Header.Set("Expect", "100-continue")
@@ -145,7 +146,7 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 		Timeout: time.Duration(cfg.Timeouts.CheckProxy.Timeout) * time.Millisecond,
 	}
 
-	if method == "PUT" {
+	if method == "POST" {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Timeouts.CheckProxy.Timeout)*time.Millisecond)
 		defer cancel()
 
@@ -167,7 +168,7 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 			if strings.Contains(err.Error(), "use of closed network connection") {
 				return true, 0
 			}
-			log.Printf("PUT <DPI Detected> Remove proxy %s from check for %s. Returned error: %s", proxyURL, target, err)
+			log.Printf("POST <DPI Detected> Remove proxy %s from check for %s. Returned error: %s", proxyURL, target, err)
 			return false, 0
 		}
 
@@ -390,10 +391,10 @@ func checkDomain(domain string, proxies []*Proxy) {
 	localProxies := make([]*Proxy, 0, len(proxies))
 	results := make([]*ProxyResult, 0, len(proxies))
 	ctx := context.WithoutCancel(context.Background())
-	if cfg.DPI.UsePUTinRechecks || len(proxies) > 1 {
-		log.Printf("Start PUT check for domain %s", domain)
+	if cfg.DPI.UsePOSTinRechecks || len(proxies) > 1 {
+		log.Printf("Start POST check for domain %s", domain)
 		for _, proxy := range proxies {
-			results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
+			results = append(results, checkProxyAsync(ctx, proxy, domain, "POST"))
 		}
 		for _, r := range results {
 			<-r.Ready
