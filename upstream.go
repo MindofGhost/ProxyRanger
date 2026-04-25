@@ -255,7 +255,7 @@ func findWorkingProxy(domain string) (string, bool) {
 			go runCheckSubdomain(domain, res.Value, proxies)
 		}
 		if resMain.Expired && domain != mainDom {
-			go runCheckSubdomain(domain, res.Value, proxies)
+			go runCheckSubdomain(mainDom, res.Value, proxies)
 		}
 	}()
 	if res.Found && resMain.Found {
@@ -375,6 +375,7 @@ func runCheckSubdomain(domain string, proxy string, proxies []*Proxy) {
 	for _, p := range proxies {
 		if p.URL == proxy {
 			<-runCheck(domain, []*Proxy{p})
+			break
 		}
 	}
 	if res := cacheGet(domain); res.Found && !res.Expired {
