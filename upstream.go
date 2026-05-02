@@ -329,7 +329,7 @@ func closeChannel(domain string) {
 	}
 }
 
-func filterProxies(domain string, proxies []*Proxy) []*Proxy {
+func filterProxies(domain string, proxies []*Proxy, blacklist bool) []*Proxy {
 	filtered := make([]*Proxy, 0, len(proxies))
 
 	for _, p := range proxies {
@@ -338,11 +338,24 @@ func filterProxies(domain string, proxies []*Proxy) []*Proxy {
 		}
 
 		skip := false
-		for _, re := range p.compiled {
-			if re.MatchString(domain) {
-				log.Printf("Proxy %s skipped for domain %s (blacklist match: %s)", p.URL, domain, re.String())
-				skip = true
-				break
+		if !blacklist {
+			skip = true
+			for _, re := range p.whitecompiled {
+				if re.MatchString(domain) {
+					log.Printf("Proxy %s added for priority check %s (whitelist match: %s)", p.URL, domain, re.String())
+					skip = false
+					break
+				}
+			}
+		}
+
+		if !skip {
+			for _, re := range p.blackcompiled {
+				if re.MatchString(domain) {
+					log.Printf("Proxy %s skipped for domain %s (blacklist match: %s)", p.URL, domain, re.String())
+					skip = true
+					break
+				}
 			}
 		}
 
@@ -357,14 +370,20 @@ func filterProxies(domain string, proxies []*Proxy) []*Proxy {
 }
 
 func runCheck(domain string, proxies []*Proxy) chan struct{} {
-	proxies = filterProxies(domain, proxies)
+	WLProxies := filterProxies(domain, proxies, false)
+	proxies = filterProxies(domain, proxies, true)
 	ch, loaded := getOrCreateChannel(domain)
 
 	if !loaded {
 		go func() {
 			defer closeChannel(domain)
-			log.Printf("All proxy for domain %s failed in full check. Return proxies back", domain)
-			checkDomain(domain, proxies)
+			log.Printf("Run check for domain %s", domain)
+			if len(WLProxies) > 0 {
+				checkDomain(domain, WLProxies)
+			}
+			if res := cacheGet(domain); (!res.Found || res.Expired) && len(WLProxies) != len(proxies) {
+				checkDomain(domain, proxies)
+			}
 		}()
 	}
 
@@ -372,7 +391,7 @@ func runCheck(domain string, proxies []*Proxy) chan struct{} {
 }
 
 func runCheckSubdomain(domain string, proxy string, proxies []*Proxy) {
-	proxies = filterProxies(domain, proxies)
+	proxies = filterProxies(domain, proxies, true)
 	for _, p := range proxies {
 		if p.URL == proxy {
 			<-runCheck(domain, []*Proxy{p})

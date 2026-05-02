@@ -34,10 +34,12 @@ type ServerConfig struct {
 }
 
 type Proxy struct {
-	URL       string           `yaml:"url"`
-	ParsedURL *url.URL         `yaml:"-"`
-	Blacklist []string         `yaml:"blacklist"`
-	compiled  []*regexp.Regexp `yaml:"-"`
+	URL           string           `yaml:"url"`
+	ParsedURL     *url.URL         `yaml:"-"`
+	Blacklist     []string         `yaml:"blacklist"`
+	blackcompiled []*regexp.Regexp `yaml:"-"`
+	Whitelist     []string         `yaml:"whitelist"`
+	whitecompiled []*regexp.Regexp `yaml:"-"`
 }
 
 type Timeouts struct {
@@ -135,7 +137,15 @@ func validateConfig(c *Config) error {
 			if err != nil {
 				return fmt.Errorf("proxy[%d] invalid blacklist regex %q: %w", i, pattern, err)
 			}
-			p.compiled = append(p.compiled, re)
+			p.blackcompiled = append(p.blackcompiled, re)
+		}
+
+		for _, pattern := range p.Whitelist {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return fmt.Errorf("proxy[%d] invalid whitelist regex %q: %w", i, pattern, err)
+			}
+			p.whitecompiled = append(p.whitecompiled, re)
 		}
 	}
 

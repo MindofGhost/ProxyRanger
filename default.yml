@@ -10,11 +10,13 @@ server:
     - PUT
 
 proxies:
-  # - url: http://127.0.0.1:8880
-  # - url: http://127.0.0.1:8888
-  # - url: http://127.0.0.1:9994
-  #   blacklist:
-  #     - vpn
+  - url: http://127.0.0.1:8880
+  - url: http://127.0.0.1:8888
+  - url: http://127.0.0.1:9994
+    blacklist:
+      - \.*vpn\.*
+    whitelist:
+      - \\.com$
 
 timeouts:
   checkProxy:
