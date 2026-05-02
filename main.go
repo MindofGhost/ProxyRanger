@@ -80,7 +80,7 @@ func main() {
 	}
 	log.Println("methods:", cfg.Server.CheckMethods)
 	for _, p := range cfg.Proxies {
-		log.Println("proxy:", p.URL, "blacklist:", p.Blacklist)
+		log.Println("proxy:", p.URL, "blacklist:", p.Blacklist, "whitelist:", p.Whitelist)
 	}
 	loadCache()
 	certPool = loadCerts(cfg.Server.CertPath)
