@@ -21,10 +21,10 @@ proxies:
 timeouts:
   checkProxy:
     TLSHandshakeTimeout: 1800
-    responseHeaderTimeout: 2500
+    responseHeaderTimeout: 3800
     expectContinueTimeout: 500
     dialContext: 1000
-    timeout: 3000
+    timeout: 4500
   clientConnection:
     timeout: 30000
     keepAlive: 30000
