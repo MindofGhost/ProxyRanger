@@ -550,6 +550,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 		if errorReturns == len(localProxies)-1 {
 			cacheSet(domain, localProxies[workingProxyID].URL)
 			log.Printf("Updated proxy %s for domain %s as its only one working proxy", localProxies[workingProxyID].URL, domain)
+			return
 		}
 		errorReturns = 0
 		for i, v := range resultsHEAD {
@@ -562,6 +563,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 		if errorReturns == len(localProxies)-1 {
 			cacheSet(domain, localProxies[workingProxyID].URL)
 			log.Printf("Updated proxy %s for domain %s as its only one working proxy", localProxies[workingProxyID].URL, domain)
+			return
 		}
 		for i := len(localProxies) - 1; i > 0; i-- {
 			if resultsGET[i].Status == resultsGET[i-1].Status {
