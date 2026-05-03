@@ -32,10 +32,10 @@ timeouts:
 
 dpi:
   uploadProbe:
-    totalSizeKB: 128
-    chunkSizeKB: 64
-    delayMS: 8
-  retryAttempts: 6
+    totalSizeKB: 3840
+    chunkSizeKB: 160
+    delayMS: 30
+  retryAttempts: 1
   usePUTinRechecks: false
 
 cache:
