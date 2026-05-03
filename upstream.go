@@ -507,7 +507,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	for _, proxy := range localProxies {
-		results = append(results, checkProxyAsync(ctx, proxy, domain, "GET"))
+		results = append(results, checkProxyAsync(ctx, proxy, domain, "HEAD"))
 	}
 	for _, r := range results {
 		<-r.Ready
