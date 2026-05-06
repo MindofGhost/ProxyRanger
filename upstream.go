@@ -569,7 +569,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 		for i := len(localProxies) - 1; i > 0; i-- {
 			if resultsGET[i].Status == resultsGET[i-1].Status {
 				idx--
-				if i != 1 || (resultsGET[i].Status == 403 && i == 1 && len(localProxies) > 2) {
+				if i != 1 || len(localProxies) == len(cfg.Proxies) || (resultsGET[i].Status == 403 && i == 1 && len(localProxies) > 2) {
 					continue
 				}
 			}
@@ -583,7 +583,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 		for i := len(localProxies) - 1; i > 0; i-- {
 			if resultsHEAD[i].Status == resultsHEAD[i-1].Status {
 				idx--
-				if i != 1 || (resultsHEAD[i].Status == 403 && i == 1 && len(localProxies) > 2) {
+				if i != 1 || len(localProxies) == len(cfg.Proxies) || (resultsHEAD[i].Status == 403 && i == 1 && len(localProxies) > 2) {
 					continue
 				}
 			}
