@@ -63,7 +63,7 @@ func dpiUploadProbe(
 
 	req.Host = host
 	req.Header.Set("User-Agent", cfg.UserAgent)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", "application/octet-stream")
 	// req.Header.Set("Expect", "100-continue")
 	req.ContentLength = int64(bytesTotal)
 
