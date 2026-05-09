@@ -3,12 +3,11 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"net/url"
 	"os"
 	"regexp"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 //go:embed default.yml
@@ -62,9 +61,9 @@ type ClientTimeouts struct {
 }
 
 type DPIConfig struct {
-	UploadProbe       UploadProbe `yaml:"uploadProbe"`
-	RetryAttempts     int         `yaml:"retryAttempts"`
-	UsePOSTinRechecks bool        `yaml:"usePOSTinRechecks"`
+	UploadProbe      UploadProbe `yaml:"uploadProbe"`
+	RetryAttempts    int         `yaml:"retryAttempts"`
+	UsePUTinRechecks bool        `yaml:"usePUTinRechecks"`
 }
 
 type UploadProbe struct {
