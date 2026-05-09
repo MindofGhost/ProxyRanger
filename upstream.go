@@ -189,7 +189,7 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 			TLSHandshakeTimeout:   time.Duration(cfg.Timeouts.CheckProxy.TLSHandshakeTimeout) * time.Millisecond,
 			ResponseHeaderTimeout: time.Duration(cfg.Timeouts.CheckProxy.ResponseHeaderTimeout) * time.Millisecond,
 			ExpectContinueTimeout: time.Duration(cfg.Timeouts.CheckProxy.ExpectContinueTimeout) * time.Millisecond,
-			DisableCompression:    true,
+			DisableCompression:    false,
 			TLSClientConfig: &tls.Config{
 				RootCAs: certPool,
 			},
@@ -231,7 +231,10 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 		return CheckResult{}
 	}
 	baseReq.Header.Set("User-Agent", cfg.UserAgent)
-
+	baseReq.Header.Set("Accept", "*/*")
+	baseReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	baseReq.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	baseReq.Header.Set("Connection", "keep-alive")
 	okCh := make(chan CheckResult, 1)
 	lastCh := make(chan CheckResult, cfg.DPI.RetryAttempts)
 	g, ctx := errgroup.WithContext(ctx)
