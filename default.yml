@@ -7,7 +7,7 @@ server:
   checkMethods:
     - GET
     - HEAD
-    - PUT
+    - POST
 
 proxies:
   # - url: http://127.0.0.1:8880
@@ -36,7 +36,7 @@ dpi:
     chunkSizeKB: 160
     delayMS: 30
   retryAttempts: 1
-  usePUTinRechecks: false
+  usePOSTinRechecks: false
 
 cache:
   ttl: 2h

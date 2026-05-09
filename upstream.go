@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"errors"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -56,7 +56,7 @@ func dpiUploadProbe(
 
 	pr, pw := io.Pipe()
 
-	req, err := http.NewRequestWithContext(ctx, "PUT", url, pr)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, pr)
 	if err != nil {
 		return err
 	}
@@ -64,13 +64,16 @@ func dpiUploadProbe(
 	req.Host = host
 	req.Header.Set("User-Agent", cfg.UserAgent)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Origin", "https://"+host)
+	req.Header.Set("Referer", "https://"+host+"/")
 	// req.Header.Set("Expect", "100-continue")
 	req.ContentLength = int64(bytesTotal)
 
 	go func() {
 		defer pw.Close()
 
-		buf := make([]byte, bytesPerChunk)
+		payload := []byte("data=" + strings.Repeat("a", bytesPerChunk-5))
 		sent := 0
 
 		for sent < bytesTotal {
@@ -79,19 +82,19 @@ func dpiUploadProbe(
 				return
 			default:
 			}
-
-			if _, err := rand.Read(buf); err != nil {
-				pw.CloseWithError(err)
-				return
+			remaining := bytesTotal - sent
+			chunk := payload
+			if remaining < len(payload) {
+				chunk = payload[:remaining]
 			}
 
-			n, err := pw.Write(buf)
+			n, err := pw.Write(chunk)
 			if err != nil {
 				return
 			}
 
 			sent += n
-			time.Sleep(delay)
+			time.Sleep(delay + time.Duration(rand.Intn(100))*time.Millisecond)
 		}
 	}()
 
@@ -189,7 +192,7 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 			TLSHandshakeTimeout:   time.Duration(cfg.Timeouts.CheckProxy.TLSHandshakeTimeout) * time.Millisecond,
 			ResponseHeaderTimeout: time.Duration(cfg.Timeouts.CheckProxy.ResponseHeaderTimeout) * time.Millisecond,
 			ExpectContinueTimeout: time.Duration(cfg.Timeouts.CheckProxy.ExpectContinueTimeout) * time.Millisecond,
-			DisableCompression:    false,
+			DisableCompression:    true,
 			TLSClientConfig: &tls.Config{
 				RootCAs: certPool,
 			},
@@ -197,7 +200,7 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 		Timeout: time.Duration(cfg.Timeouts.CheckProxy.Timeout) * time.Millisecond,
 	}
 
-	if method == "PUT" {
+	if method == "POST" {
 		ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeouts.CheckProxy.Timeout)*time.Millisecond)
 		defer cancel()
 
@@ -219,7 +222,7 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 			if strings.Contains(err.Error(), "use of closed network connection") {
 				return CheckResult{OK: true}
 			}
-			log.Printf("PUT <DPI Detected> Remove proxy %s from check for %s. Returned error: %s", proxyURL, target, err)
+			log.Printf("POST <DPI Detected> Remove proxy %s from check for %s. Returned error: %s", proxyURL, target, err)
 			return CheckResult{}
 		}
 
@@ -233,8 +236,8 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 	baseReq.Header.Set("User-Agent", cfg.UserAgent)
 	baseReq.Header.Set("Accept", "*/*")
 	baseReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	baseReq.Header.Set("Accept-Encoding", "gzip, deflate, br")
-	baseReq.Header.Set("Connection", "keep-alive")
+	baseReq.Header.Set("Origin", "https://"+target)
+	baseReq.Header.Set("Referer", "https://"+target+"/")
 	okCh := make(chan CheckResult, 1)
 	lastCh := make(chan CheckResult, cfg.DPI.RetryAttempts)
 	g, ctx := errgroup.WithContext(ctx)
@@ -484,10 +487,10 @@ func checkDomain(domain string, proxies []*Proxy) {
 	results := make([]*ProxyResult, 0, len(proxies))
 	resultsGET := make([]*ProxyResult, 0, len(proxies))
 	// ctx := context.WithoutCancel(context.Background())
-	// if cfg.DPI.UsePUTinRechecks || len(proxies) > 1 {
-	// 	log.Printf("Start PUT check for domain %s", domain)
+	// if cfg.DPI.UsePOSTinRechecks || len(proxies) > 1 {
+	// 	log.Printf("Start POST check for domain %s", domain)
 	// 	for _, proxy := range proxies {
-	// 		results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
+	// 		results = append(results, checkProxyAsync(ctx, proxy, domain, "POST"))
 	// 	}
 	// 	for _, r := range results {
 	// 		<-r.Ready
@@ -598,17 +601,17 @@ func checkDomain(domain string, proxies []*Proxy) {
 		}
 	}
 
-	if cfg.DPI.UsePUTinRechecks || len(proxies) > 1 {
-		log.Printf("Start PUT check for domain %s", domain)
+	if cfg.DPI.UsePOSTinRechecks || len(proxies) > 1 {
+		log.Printf("Start POST check for domain %s", domain)
 		for _, proxy := range proxies {
-			results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
+			results = append(results, checkProxyAsync(ctx, proxy, domain, "POST"))
 		}
 		for _, r := range results {
 			<-r.Ready
 			if r.OK {
 				cancel()
 				cacheSet(domain, r.Proxy.URL)
-				log.Printf("Selected proxy %s for domain %s via PUT", r.Proxy.URL, domain)
+				log.Printf("Selected proxy %s for domain %s via POST", r.Proxy.URL, domain)
 				return
 			}
 		}
