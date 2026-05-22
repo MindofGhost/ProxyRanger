@@ -466,8 +466,8 @@ func runCheck(domain string, proxies []*Proxy) chan struct{} {
 
 func runCheckSubdomain(domain string, proxy string, proxies []*Proxy) {
 	proxies = filterProxies(domain, proxies, true)
-	for _, p := range proxies {
-		if p.URL == proxy {
+	for i, p := range proxies {
+		if p.URL == proxy && i != len(proxies)-1 {
 			<-runCheck(domain, []*Proxy{p})
 			break
 		}
