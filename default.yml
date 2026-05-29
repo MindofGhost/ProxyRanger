@@ -4,10 +4,6 @@ server:
   certPath: certs
   cacheFile: cache/cache.json
   userCacheFile: cache/user.json
-  checkMethods:
-    - GET
-    - HEAD
-    - PUT
 
 proxies:
   # - url: http://127.0.0.1:8880
@@ -21,10 +17,10 @@ proxies:
 timeouts:
   checkProxy:
     TLSHandshakeTimeout: 1800
-    responseHeaderTimeout: 3800
+    responseHeaderTimeout: 2500
     expectContinueTimeout: 500
     dialContext: 1000
-    timeout: 4500
+    timeout: 3000
   clientConnection:
     timeout: 30000
     keepAlive: 30000

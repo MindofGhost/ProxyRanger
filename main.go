@@ -78,7 +78,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Println("methods:", cfg.Server.CheckMethods)
 	for _, p := range cfg.Proxies {
 		log.Println("proxy:", p.URL, "blacklist:", p.Blacklist, "whitelist:", p.Whitelist)
 	}
