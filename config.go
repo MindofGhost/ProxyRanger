@@ -25,12 +25,11 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host          string   `yaml:"host"`
-	Port          int      `yaml:"port"`
-	CertPath      string   `yaml:"certPath"`
-	CacheFile     string   `yaml:"cacheFile"`
-	UserCacheFile string   `yaml:"userCacheFile"`
-	CheckMethods  []string `yaml:"checkMethods"`
+	Host          string `yaml:"host"`
+	Port          int    `yaml:"port"`
+	CertPath      string `yaml:"certPath"`
+	CacheFile     string `yaml:"cacheFile"`
+	UserCacheFile string `yaml:"userCacheFile"`
 }
 
 type Proxy struct {

@@ -5,15 +5,17 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"errors"
-	"golang.org/x/net/publicsuffix"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
+	"golang.org/x/sync/errgroup"
 )
 
 type StatusError int
@@ -22,6 +24,8 @@ type ProxyResult struct {
 	Proxy  *Proxy
 	Status int
 	OK     bool
+	Bytes  int64
+	Speed  float64
 
 	Ready chan struct{}
 }
@@ -32,6 +36,13 @@ type inflightEntry struct {
 }
 
 func (e StatusError) Error() string { return "" }
+
+type CheckResult struct {
+	OK     bool
+	Status int
+	Bytes  int64
+	Speed  float64
+}
 
 func dpiUploadProbe(
 	ctx context.Context,
@@ -53,7 +64,7 @@ func dpiUploadProbe(
 	req.Host = host
 	req.Header.Set("User-Agent", cfg.UserAgent)
 	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("Expect", "100-continue")
+	// req.Header.Set("Expect", "100-continue")
 	req.ContentLength = int64(bytesTotal)
 
 	go func() {
@@ -95,38 +106,79 @@ func dpiUploadProbe(
 	return nil
 }
 
-func makeRequest(client *http.Client, req *http.Request, proxyURL *url.URL, target, method string) (ok bool, status int) {
+func makeRequest(client *http.Client, req *http.Request, proxyURL *url.URL, target, method string) CheckResult {
+
+	start := time.Now()
+	var firstByteTime time.Time
+
+	trace := &httptrace.ClientTrace{
+		GotFirstResponseByte: func() {
+			firstByteTime = time.Now()
+		},
+	}
+
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+
+	res := CheckResult{}
 
 	resp, err := client.Do(req)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) && errors.Is(err, context.DeadlineExceeded) {
 			log.Printf("%s Proxy %s failed to reach %s: %v", method, proxyURL, target, err)
 		}
-		return false, 0
+		return res
 	}
 	defer resp.Body.Close()
 
+	res.Status = resp.StatusCode
+
 	if resp.StatusCode >= 400 && resp.StatusCode != 404 && resp.StatusCode != 418 {
 		log.Printf("%s Proxy %s returned bad status %d for %s", method, proxyURL, resp.StatusCode, target)
-		return false, resp.StatusCode
+		return res
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("%s Proxy %s read body failed: %v for %s", method, proxyURL, err, target)
-		return false, 0
+	// --- ЧИТАЕМ ВСЁ ТЕЛО ---
+	n, readErr := io.Copy(io.Discard, resp.Body)
+	totalTime := time.Since(start)
+
+	res.Bytes = n
+
+	// TTFB (оставлено для логов)
+	var ttfb time.Duration
+	if !firstByteTime.IsZero() {
+		ttfb = firstByteTime.Sub(start)
 	}
 
-	if method != "HEAD" && resp.ContentLength > 0 && int64(len(body)) != resp.ContentLength {
-		log.Printf("%s Proxy %s returned only %d bytes instead of %d for %s. Bad proxy or DPI detected", method, proxyURL, int64(len(body)), resp.ContentLength, target)
-		return false, 0
+	if readErr != nil {
+		log.Printf("%s Proxy %s body read error for %s: %v (bytes=%d, time=%s, ttfb=%s)",
+			method, proxyURL, target, readErr, n, totalTime, ttfb)
+		return res
 	}
 
-	return true, resp.StatusCode
+	// Проверка полной доставки
+	if method != "HEAD" && resp.ContentLength > 0 && n != resp.ContentLength {
+		log.Printf("%s Proxy %s returned only %d bytes instead of %d for %s. Bad proxy or DPI detected",
+			method, proxyURL, n, resp.ContentLength, target)
+		return res
+	}
+
+	// Скорость
+	if totalTime > 0 {
+		res.Speed = float64(n) / totalTime.Seconds()
+	}
+	if n < 30000 {
+		return res
+	}
+
+	log.Printf("%s Proxy %s OK %s | bytes=%d | time=%s | ttfb=%s | speed=%.2f KB/s",
+		method, proxyURL, target, n, totalTime, ttfb, res.Speed/1024)
+
+	res.OK = true
+	return res
 }
 
 // Проверка доступности прокси через target
-func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method string) (ok bool, status int) {
+func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method string) CheckResult {
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -146,7 +198,7 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 	}
 
 	if method == "PUT" {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Timeouts.CheckProxy.Timeout)*time.Millisecond)
+		ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeouts.CheckProxy.Timeout)*time.Millisecond)
 		defer cancel()
 
 		err := dpiUploadProbe(
@@ -161,41 +213,49 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
-				return true, 0
+				return CheckResult{OK: true}
 			}
 
 			if strings.Contains(err.Error(), "use of closed network connection") {
-				return true, 0
+				return CheckResult{OK: true}
 			}
 			log.Printf("PUT <DPI Detected> Remove proxy %s from check for %s. Returned error: %s", proxyURL, target, err)
-			return false, 0
+			return CheckResult{}
 		}
 
-		return true, 0
+		return CheckResult{OK: true}
 	}
 
 	baseReq, err := http.NewRequestWithContext(ctx, method, "https://"+target, nil)
 	if err != nil {
-		return false, 0
+		return CheckResult{}
 	}
 	baseReq.Header.Set("User-Agent", cfg.UserAgent)
+	baseReq.Header.Set("Accept", "*/*")
+	baseReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	baseReq.Header.Set("Origin", "https://"+target)
+	baseReq.Header.Set("Referer", "https://"+target+"/")
 
-	okCh := make(chan int, 1)
-
-	g, ctx := errgroup.WithContext(context.Background())
+	okCh := make(chan CheckResult, 1)
+	lastCh := make(chan CheckResult, cfg.DPI.RetryAttempts)
+	g, ctx := errgroup.WithContext(ctx)
 
 	for attempt := 1; attempt <= cfg.DPI.RetryAttempts; attempt++ {
 		g.Go(func() error {
 			req := baseReq.Clone(ctx)
 
-			ok, status := makeRequest(client, req, proxyURL, target, method)
+			res := makeRequest(client, req, proxyURL, target, method)
 
-			if !ok {
-				return StatusError(status)
+			select {
+			case lastCh <- res:
+			default:
+			}
+			if !res.OK {
+				return StatusError(res.Status)
 			}
 
 			select {
-			case okCh <- status:
+			case okCh <- res:
 			default:
 			}
 			return nil
@@ -204,14 +264,23 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 
 	if err := g.Wait(); err != nil {
 
-		if se, ok := err.(StatusError); ok {
-			return false, int(se)
+		close(lastCh)
+		var last CheckResult
+		for r := range lastCh {
+			last = r
 		}
-		return false, 0
+
+		if last.Status == 0 {
+			if se, ok := err.(StatusError); ok {
+				last.Status = int(se)
+			}
+		}
+
+		return last
 	}
 
-	status = <-okCh
-	return true, status
+	res := <-okCh
+	return res
 }
 
 func checkProxyAsync(ctx context.Context, p *Proxy, domain string, method string) *ProxyResult {
@@ -221,7 +290,12 @@ func checkProxyAsync(ctx context.Context, p *Proxy, domain string, method string
 	}
 
 	go func() {
-		res.OK, res.Status = checkProxy(ctx, p.ParsedURL, domain, method)
+		r := checkProxy(ctx, p.ParsedURL, domain, method)
+
+		res.OK = r.OK
+		res.Status = r.Status
+		res.Bytes = r.Bytes
+		res.Speed = r.Speed
 		close(res.Ready)
 	}()
 
@@ -392,8 +466,8 @@ func runCheck(domain string, proxies []*Proxy) chan struct{} {
 
 func runCheckSubdomain(domain string, proxy string, proxies []*Proxy) {
 	proxies = filterProxies(domain, proxies, true)
-	for _, p := range proxies {
-		if p.URL == proxy {
+	for i, p := range proxies {
+		if p.URL == proxy && i != len(proxies)-1 {
 			<-runCheck(domain, []*Proxy{p})
 			break
 		}
@@ -407,55 +481,58 @@ func runCheckSubdomain(domain string, proxy string, proxies []*Proxy) {
 // Функция проверки домена
 func checkDomain(domain string, proxies []*Proxy) {
 	localProxies := make([]*Proxy, 0, len(proxies))
+	resultsHEAD := make([]*ProxyResult, 0, len(proxies))
 	results := make([]*ProxyResult, 0, len(proxies))
-	ctx := context.WithoutCancel(context.Background())
-	if cfg.DPI.UsePUTinRechecks || len(proxies) > 1 {
-		log.Printf("Start PUT check for domain %s", domain)
-		for _, proxy := range proxies {
-			results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
-		}
-		for _, r := range results {
-			<-r.Ready
-			if r.OK {
-				localProxies = append(localProxies, r.Proxy)
-			}
-		}
-	} else {
-		localProxies = proxies
-	}
+	resultsGET := make([]*ProxyResult, 0, len(proxies))
+	// ctx := context.WithoutCancel(context.Background())
+	// if cfg.DPI.UsePUTinRechecks || len(proxies) > 1 {
+	// 	log.Printf("Start PUT check for domain %s", domain)
+	// 	for _, proxy := range proxies {
+	// 		results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
+	// 	}
+	// 	for _, r := range results {
+	// 		<-r.Ready
+	// 		if r.OK {
+	// 			localProxies = append(localProxies, r.Proxy)
+	// 		}
+	// 	}
+	// } else {
+	localProxies = proxies
+	// }
 
-	if len(localProxies) == 0 {
-		if len(proxies) > 1 {
-			log.Printf("All proxy for domain %s failed in full check. Return proxies back", domain)
-			localProxies = proxies
-		} else {
-			log.Printf("All proxy for domain %s failed", domain)
-			return
-		}
-	}
-	// Проверяем основной домен
-	// for _, proxy := range localProxies {
-	// 	if ok, _ := checkProxy(proxy, mainDom, "HEAD"); ok {
-	// 		cacheMu.Lock()
-	// 		cache[mainDom] = proxy
-	// 		cacheMu.Unlock()
-	// 		log.Printf("Selected proxy %s for domain %s and all its subdomains via HEAD", proxy, mainDom)
+	// if len(localProxies) == 0 {
+	// 	if len(proxies) > 1 {
+	// 		log.Printf("All proxy for domain %s failed in full check. Return proxies back", domain)
+	// 		localProxies = proxies
+	// 	} else {
+	// 		log.Printf("All proxy for domain %s failed", domain)
 	// 		return
 	// 	}
 	// }
-	codes := make([]int, len(localProxies))
 
-	// 2. Если все HEAD провалились - пробуем GET
-	results = make([]*ProxyResult, 0, len(localProxies))
+	log.Printf("Start HEAD check for domain %s", domain)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	for _, proxy := range localProxies {
+		resultsHEAD = append(resultsHEAD, checkProxyAsync(ctx, proxy, domain, "HEAD"))
+	}
+	for _, r := range resultsHEAD {
+		<-r.Ready
+		if r.OK {
+			cancel()
+			cacheSet(domain, r.Proxy.URL)
+			log.Printf("Selected proxy %s for domain %s via HEAD", r.Proxy.URL, domain)
+			return
+		}
+	}
+
+	// 2. Если все HEAD провалились - пробуем GET
 	log.Printf("Start GET check for domain %s", domain)
 	for _, proxy := range localProxies {
-		results = append(results, checkProxyAsync(ctx, proxy, domain, "GET"))
+		resultsGET = append(resultsGET, checkProxyAsync(ctx, proxy, domain, "GET"))
 	}
-	for i, r := range results {
+	for _, r := range resultsGET {
 		<-r.Ready
-		codes[i] = r.Status
 		if r.OK {
 			cancel()
 			cacheSet(domain, r.Proxy.URL)
@@ -466,16 +543,73 @@ func checkDomain(domain string, proxies []*Proxy) {
 
 	if len(localProxies) > 1 {
 		idx := len(localProxies) - 1
+		errorReturns := 0
+		var workingProxyID int
+		for i, v := range resultsGET {
+			if v.Status == 0 {
+				errorReturns++
+			} else {
+				workingProxyID = i
+			}
+		}
+		if errorReturns == len(localProxies)-1 {
+			cacheSet(domain, localProxies[workingProxyID].URL)
+			log.Printf("Updated proxy %s for domain %s as its only one working proxy", localProxies[workingProxyID].URL, domain)
+			return
+		}
+		errorReturns = 0
+		for i, v := range resultsHEAD {
+			if v.Status == 0 {
+				errorReturns++
+			} else {
+				workingProxyID = i
+			}
+		}
+		if errorReturns == len(localProxies)-1 {
+			cacheSet(domain, localProxies[workingProxyID].URL)
+			log.Printf("Updated proxy %s for domain %s as its only one working proxy", localProxies[workingProxyID].URL, domain)
+			return
+		}
 		for i := len(localProxies) - 1; i > 0; i-- {
-			if codes[i] == codes[i-1] {
+			if resultsGET[i].Status == resultsGET[i-1].Status {
 				idx--
-				if i != 1 || len(localProxies) == len(cfg.Proxies) || (codes[i] == 403 && i == 1) {
+				if i != 1 || len(localProxies) == len(cfg.Proxies) || (resultsGET[i].Status == 403 && i == 1 && len(localProxies) > 2) {
 					continue
 				}
 			}
 			if idx != len(localProxies)-1 {
 				cacheSet(domain, localProxies[idx].URL)
-				log.Printf("Updated proxy %s for domain %s based on response difference", localProxies[idx].URL, domain)
+				log.Printf("Updated proxy %s for domain %s based on GET response difference", localProxies[idx].URL, domain)
+				return
+			}
+		}
+		idx = len(localProxies) - 1
+		for i := len(localProxies) - 1; i > 0; i-- {
+			if resultsHEAD[i].Status == resultsHEAD[i-1].Status {
+				idx--
+				if i != 1 || len(localProxies) == len(cfg.Proxies) || (resultsHEAD[i].Status == 403 && i == 1 && len(localProxies) > 2) {
+					continue
+				}
+			}
+			if idx != len(localProxies)-1 {
+				cacheSet(domain, localProxies[idx].URL)
+				log.Printf("Updated proxy %s for domain %s based on HEAD response difference", localProxies[idx].URL, domain)
+				return
+			}
+		}
+	}
+
+	if cfg.DPI.UsePUTinRechecks || len(proxies) > 1 {
+		log.Printf("Start PUT check for domain %s", domain)
+		for _, proxy := range proxies {
+			results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
+		}
+		for _, r := range results {
+			<-r.Ready
+			if r.OK {
+				cancel()
+				cacheSet(domain, r.Proxy.URL)
+				log.Printf("Selected proxy %s for domain %s via PUT", r.Proxy.URL, domain)
 				return
 			}
 		}
