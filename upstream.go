@@ -5,17 +5,17 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"errors"
+	"golang.org/x/net/publicsuffix"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"time"
-
-	"golang.org/x/net/publicsuffix"
-	"golang.org/x/sync/errgroup"
 )
 
 type StatusError int
@@ -179,8 +179,13 @@ func makeRequest(client *http.Client, req *http.Request, proxyURL *url.URL, targ
 
 // Проверка доступности прокси через target
 func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method string) CheckResult {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		panic(err)
+	}
 
 	client := &http.Client{
+		Jar: jar,
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
 			DialContext: (&net.Dialer{
