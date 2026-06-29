@@ -551,11 +551,12 @@ func checkDomain(domain string, proxies []*Proxy) {
 		errorReturns := 0
 		var workingProxyID int
 		for i, v := range resultsGET {
-			if v.Status == 0 {
+			if v.Status == 0 || v.Status == 403 {
 				errorReturns++
 			} else {
 				workingProxyID = i
 			}
+
 		}
 		if errorReturns == len(localProxies)-1 {
 			cacheSet(domain, localProxies[workingProxyID].URL)
@@ -564,7 +565,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 		}
 		errorReturns = 0
 		for i, v := range resultsHEAD {
-			if v.Status == 0 {
+			if v.Status == 0 || v.Status == 403 {
 				errorReturns++
 			} else {
 				workingProxyID = i
