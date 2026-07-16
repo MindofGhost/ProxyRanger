@@ -63,6 +63,7 @@ func dpiUploadProbe(
 
 	req.Host = host
 	req.Header.Set("User-Agent", cfg.UserAgent)
+	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Content-Type", "application/octet-stream")
 	// req.Header.Set("Expect", "100-continue")
 	req.ContentLength = int64(bytesTotal)
@@ -240,6 +241,7 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 	baseReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	baseReq.Header.Set("Origin", "https://"+target)
 	baseReq.Header.Set("Referer", "https://"+target+"/")
+	baseReq.Header.Set("Accept-Encoding", "identity")
 
 	okCh := make(chan CheckResult, 1)
 	lastCh := make(chan CheckResult, cfg.DPI.RetryAttempts)
