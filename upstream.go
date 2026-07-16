@@ -240,7 +240,6 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 	baseReq.Header.Set("Accept", "*/*")
 	baseReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	baseReq.Header.Set("Origin", "https://"+target)
-	baseReq.Header.Set("Referer", "https://"+target+"/")
 	baseReq.Header.Set("Accept-Encoding", "identity")
 
 	okCh := make(chan CheckResult, 1)
