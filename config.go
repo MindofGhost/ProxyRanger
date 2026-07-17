@@ -3,11 +3,12 @@ package main
 import (
 	_ "embed"
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"net/url"
 	"os"
 	"regexp"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 //go:embed default.yml
@@ -66,9 +67,9 @@ type DPIConfig struct {
 }
 
 type UploadProbe struct {
-	TotalSizeKB int `yaml:"totalSizeKB"`
-	ChunkSizeKB int `yaml:"chunkSizeKB"`
-	DelayMS     int `yaml:"delayMS"`
+	totalSizeBytes int `yaml:"totalSizeBytes"`
+	chunkSizeBytes int `yaml:"chunkSizeBytes"`
+	DelayMS        int `yaml:"delayMS"`
 }
 
 type Cache struct {

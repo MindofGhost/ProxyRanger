@@ -28,8 +28,8 @@ timeouts:
 
 dpi:
   uploadProbe:
-    totalSizeKB: 3840
-    chunkSizeKB: 160
+    totalSizeBytes: 4160
+    chunkSizeBytes: 160
     delayMS: 30
   retryAttempts: 1
   usePUTinRechecks: false
@@ -40,4 +40,4 @@ cache:
   saveTime: 5m
   cleanupInterval: 12h
 
-userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+userAgent: "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0"

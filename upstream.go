@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"errors"
-	"golang.org/x/net/publicsuffix"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net"
@@ -16,6 +14,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
+	"golang.org/x/sync/errgroup"
 )
 
 type StatusError int
@@ -212,8 +213,8 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 			client,
 			"https://"+target,
 			target,
-			cfg.DPI.UploadProbe.TotalSizeKB,
-			cfg.DPI.UploadProbe.ChunkSizeKB,
+			cfg.DPI.UploadProbe.totalSizeBytes,
+			cfg.DPI.UploadProbe.chunkSizeBytes,
 			time.Duration(cfg.DPI.UploadProbe.DelayMS)*time.Millisecond,
 		)
 

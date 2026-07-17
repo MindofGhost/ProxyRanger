@@ -200,8 +200,8 @@ Configuration:
 ```yaml
 dpi:
   uploadProbe:
-    totalSizeKB: 3840
-    chunkSizeKB: 160
+    totalSizeBytes: 3840
+    chunkSizeBytes: 160
     delayMS: 30
 
   retryAttempts: 1
@@ -210,8 +210,8 @@ dpi:
 
 Meaning:
 
-- `totalSizeKB` — total upload size used for DPI probing
-- `chunkSizeKB` — upload chunk size
+- `totalSizeBytes` — total upload size used for DPI probing
+- `chunkSizeBytes` — upload chunk size
 - `delayMS` — delay between chunks
 - `retryAttempts` — number of repeated validation attempts
 - `usePUTinRechecks` — whether PUT probing is used during cache revalidation
