@@ -221,7 +221,7 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 		)
 
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
+			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
 				return CheckResult{OK: true}
 			}
 
