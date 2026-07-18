@@ -552,7 +552,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 	uniqueProxies := proxies
 	if len(proxies) > 1 {
 		checkDomainExeptionsProxiesHEAD := checkDomainExeptions(domain, resultsHEAD, proxies, "HEAD")
-		if len(checkDomainExeptionsProxiesHEAD) == 1 {
+		if len(checkDomainExeptionsProxiesHEAD) == 1 && len(cfg.Proxies) == len(proxies) {
 			cacheSet(domain, checkDomainExeptionsProxiesHEAD[0].URL)
 			return
 		}
