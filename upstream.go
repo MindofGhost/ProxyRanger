@@ -551,12 +551,12 @@ func checkDomain(domain string, proxies []*Proxy) {
 
 	uniqueProxies := proxies
 	if len(proxies) > 1 {
-		checkDomainExeptionsProxiesHEAD := checkDomainExeptions(domain, resultsHEAD, proxies, "HEAD")
-		if len(checkDomainExeptionsProxiesHEAD) == 1 && len(cfg.Proxies) == len(proxies) {
+		checkDomainExeptionsProxiesHEAD := checkDomainExeptions(domain, resultsHEAD, proxies, "HEAD", len(cfg.Proxies) == len(proxies))
+		if len(checkDomainExeptionsProxiesHEAD) == 1 {
 			cacheSet(domain, checkDomainExeptionsProxiesHEAD[0].URL)
 			return
 		}
-		checkDomainExeptionsProxiesGET := checkDomainExeptions(domain, resultsGET, proxies, "GET")
+		checkDomainExeptionsProxiesGET := checkDomainExeptions(domain, resultsGET, proxies, "GET", len(cfg.Proxies) == len(proxies))
 		if len(checkDomainExeptionsProxiesGET) == 1 {
 			cacheSet(domain, checkDomainExeptionsProxiesGET[0].URL)
 			return
@@ -601,14 +601,14 @@ func checkDomain(domain string, proxies []*Proxy) {
 	}
 }
 
-func checkDomainExeptions(domain string, results []*ProxyResult, proxies []*Proxy, method string) []*Proxy {
+func checkDomainExeptions(domain string, results []*ProxyResult, proxies []*Proxy, method string, full_list bool) []*Proxy {
 	localProxies := make([]*Proxy, 0, len(proxies))
 	for _, v := range results {
 		if v.Status != 0 {
 			localProxies = append(localProxies, v.Proxy)
 		}
 	}
-	if len(localProxies) == 1 {
+	if len(localProxies) == 1 && full_list {
 		log.Printf("Updated proxy %s for domain %s as its only one working proxy in %s", localProxies[0].URL, domain, method)
 		return localProxies
 	}
