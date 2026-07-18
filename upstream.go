@@ -169,6 +169,8 @@ func makeRequest(client *http.Client, req *http.Request, proxyURL *url.URL, targ
 		res.Speed = float64(n) / totalTime.Seconds()
 	}
 	if n < 30000 {
+		log.Printf("%s Proxy %s return only %d bytes. Too short responce",
+			method, proxyURL, n)
 		return res
 	}
 
@@ -226,7 +228,7 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 			if strings.Contains(err.Error(), "use of closed network connection") {
 				return CheckResult{OK: true}
 			}
-			log.Printf("PUT <DPI Detected> Remove proxy %s from check for %s. Returned error: %s", proxyURL, target, err)
+			log.Printf("PUT Remove proxy %s from check for %s. Returned error: %s. DPI or site restrictions?", proxyURL, target, err)
 			return CheckResult{}
 		}
 
@@ -487,7 +489,6 @@ func runCheckSubdomain(domain string, proxy string, proxies []*Proxy) {
 
 // Функция проверки домена
 func checkDomain(domain string, proxies []*Proxy) {
-	localProxies := make([]*Proxy, 0, len(proxies))
 	resultsHEAD := make([]*ProxyResult, 0, len(proxies))
 	results := make([]*ProxyResult, 0, len(proxies))
 	resultsGET := make([]*ProxyResult, 0, len(proxies))
@@ -504,7 +505,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 	// 		}
 	// 	}
 	// } else {
-	localProxies = proxies
+	// localProxies = proxies
 	// }
 
 	// if len(localProxies) == 0 {
@@ -520,7 +521,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 	log.Printf("Start HEAD check for domain %s", domain)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	for _, proxy := range localProxies {
+	for _, proxy := range proxies {
 		resultsHEAD = append(resultsHEAD, checkProxyAsync(ctx, proxy, domain, "HEAD"))
 	}
 	for _, r := range resultsHEAD {
@@ -535,7 +536,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 
 	// 2. Если все HEAD провалились - пробуем GET
 	log.Printf("Start GET check for domain %s", domain)
-	for _, proxy := range localProxies {
+	for _, proxy := range proxies {
 		resultsGET = append(resultsGET, checkProxyAsync(ctx, proxy, domain, "GET"))
 	}
 	for _, r := range resultsGET {
@@ -548,68 +549,35 @@ func checkDomain(domain string, proxies []*Proxy) {
 		}
 	}
 
-	if len(localProxies) > 1 {
-		idx := len(localProxies) - 1
-		errorReturns := 0
-		var workingProxyID int
-		for i, v := range resultsGET {
-			if v.Status == 0 || v.Status == 403 {
-				errorReturns++
-			} else {
-				workingProxyID = i
-			}
+	uniqueProxies := proxies
+	if len(proxies) > 1 {
+		checkDomainExeptionsProxiesHEAD := checkDomainExeptions(domain, resultsHEAD, proxies, "HEAD")
+		if len(checkDomainExeptionsProxiesHEAD) == 1 {
+			cacheSet(domain, checkDomainExeptionsProxiesHEAD[0].URL)
+			return
+		}
+		checkDomainExeptionsProxiesGET := checkDomainExeptions(domain, resultsGET, proxies, "GET")
+		if len(checkDomainExeptionsProxiesGET) == 1 {
+			cacheSet(domain, checkDomainExeptionsProxiesGET[0].URL)
+			return
+		}
 
-		}
-		if errorReturns == len(localProxies)-1 {
-			cacheSet(domain, localProxies[workingProxyID].URL)
-			log.Printf("Updated proxy %s for domain %s as its only one working proxy", localProxies[workingProxyID].URL, domain)
-			return
-		}
-		errorReturns = 0
-		for i, v := range resultsHEAD {
-			if v.Status == 0 || v.Status == 403 {
-				errorReturns++
-			} else {
-				workingProxyID = i
+		// Deduplicate proxy list
+		uniqueProxies = make([]*Proxy, 0, len(checkDomainExeptionsProxiesHEAD)+len(checkDomainExeptionsProxiesGET))
+		addedProxies := make(map[*Proxy]bool)
+
+		for _, proxy := range append(checkDomainExeptionsProxiesHEAD, checkDomainExeptionsProxiesGET...) {
+			if addedProxies[proxy] {
+				continue
 			}
+			addedProxies[proxy] = true
+			uniqueProxies = append(uniqueProxies, proxy)
 		}
-		if errorReturns == len(localProxies)-1 {
-			cacheSet(domain, localProxies[workingProxyID].URL)
-			log.Printf("Updated proxy %s for domain %s as its only one working proxy", localProxies[workingProxyID].URL, domain)
-			return
-		}
-		for i := len(localProxies) - 1; i > 0; i-- {
-			if resultsGET[i].Status == resultsGET[i-1].Status {
-				idx--
-				if i != 1 || len(localProxies) == len(cfg.Proxies) || (resultsGET[i].Status == 403 && i == 1 && len(localProxies) > 2) {
-					continue
-				}
-			}
-			if idx != len(localProxies)-1 {
-				cacheSet(domain, localProxies[idx].URL)
-				log.Printf("Updated proxy %s for domain %s based on GET response difference", localProxies[idx].URL, domain)
-				return
-			}
-		}
-		idx = len(localProxies) - 1
-		for i := len(localProxies) - 1; i > 0; i-- {
-			if resultsHEAD[i].Status == resultsHEAD[i-1].Status {
-				idx--
-				if i != 1 || len(localProxies) == len(cfg.Proxies) || (resultsHEAD[i].Status == 403 && i == 1 && len(localProxies) > 2) {
-					continue
-				}
-			}
-			if idx != len(localProxies)-1 {
-				cacheSet(domain, localProxies[idx].URL)
-				log.Printf("Updated proxy %s for domain %s based on HEAD response difference", localProxies[idx].URL, domain)
-				return
-			}
-		}
+
 	}
-
 	if cfg.DPI.UsePUTinRechecks || len(proxies) > 1 {
 		log.Printf("Start PUT check for domain %s", domain)
-		for _, proxy := range proxies {
+		for _, proxy := range uniqueProxies {
 			results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
 		}
 		for _, r := range results {
@@ -622,6 +590,7 @@ func checkDomain(domain string, proxies []*Proxy) {
 			}
 		}
 	}
+
 	mainDom := mainDomain(domain)
 	if len(proxies) != 1 {
 		if res := cacheGet(mainDom); res.Found {
@@ -630,5 +599,32 @@ func checkDomain(domain string, proxies []*Proxy) {
 			return
 		}
 	}
+}
 
+func checkDomainExeptions(domain string, results []*ProxyResult, proxies []*Proxy, method string) []*Proxy {
+	localProxies := make([]*Proxy, 0, len(proxies))
+	for _, v := range results {
+		if v.Status != 0 {
+			localProxies = append(localProxies, v.Proxy)
+		}
+	}
+	if len(localProxies) == 1 {
+		log.Printf("Updated proxy %s for domain %s as its only one working proxy in %s", localProxies[0].URL, domain, method)
+		return localProxies
+	}
+
+	idx := len(proxies) - 1
+	for i := len(proxies) - 1; i > 0; i-- {
+		if results[i].Status == results[i-1].Status {
+			idx--
+			if i != 1 || len(proxies) == len(cfg.Proxies) || (results[i].Status == 403 && i == 1 && len(proxies) > 2) {
+				continue
+			}
+		}
+		if idx != len(proxies)-1 {
+			log.Printf("Updated proxy %s for domain %s based on %s response difference", proxies[idx].URL, domain, method)
+			return proxies[idx : idx+1]
+		}
+	}
+	return localProxies
 }
