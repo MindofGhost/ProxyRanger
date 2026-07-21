@@ -67,8 +67,8 @@ type DPIConfig struct {
 }
 
 type UploadProbe struct {
-	totalSizeBytes int `yaml:"totalSizeBytes"`
-	chunkSizeBytes int `yaml:"chunkSizeBytes"`
+	TotalSizeBytes int `yaml:"totalSizeBytes"`
+	ChunkSizeBytes int `yaml:"chunkSizeBytes"`
 	DelayMS        int `yaml:"delayMS"`
 }
 

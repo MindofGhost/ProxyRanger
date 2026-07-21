@@ -215,8 +215,8 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 			client,
 			"https://"+target,
 			target,
-			cfg.DPI.UploadProbe.totalSizeBytes,
-			cfg.DPI.UploadProbe.chunkSizeBytes,
+			cfg.DPI.UploadProbe.TotalSizeBytes,
+			cfg.DPI.UploadProbe.ChunkSizeBytes,
 			time.Duration(cfg.DPI.UploadProbe.DelayMS)*time.Millisecond,
 		)
 
