@@ -518,24 +518,9 @@ func checkDomain(domain string, proxies []*Proxy) {
 	// 	}
 	// }
 
-	log.Printf("Start HEAD check for domain %s", domain)
+	log.Printf("Start GET check for domain %s", domain)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	for _, proxy := range proxies {
-		resultsHEAD = append(resultsHEAD, checkProxyAsync(ctx, proxy, domain, "HEAD"))
-	}
-	for _, r := range resultsHEAD {
-		<-r.Ready
-		if r.OK {
-			cancel()
-			cacheSet(domain, r.Proxy.URL)
-			log.Printf("Selected proxy %s for domain %s via HEAD", r.Proxy.URL, domain)
-			return
-		}
-	}
-
-	// 2. Если все HEAD провалились - пробуем GET
-	log.Printf("Start GET check for domain %s", domain)
 	for _, proxy := range proxies {
 		resultsGET = append(resultsGET, checkProxyAsync(ctx, proxy, domain, "GET"))
 	}
@@ -545,6 +530,20 @@ func checkDomain(domain string, proxies []*Proxy) {
 			cancel()
 			cacheSet(domain, r.Proxy.URL)
 			log.Printf("Selected proxy %s for domain %s via GET", r.Proxy.URL, domain)
+			return
+		}
+	}
+
+	log.Printf("Start HEAD check for domain %s", domain)
+	for _, proxy := range proxies {
+		resultsHEAD = append(resultsHEAD, checkProxyAsync(ctx, proxy, domain, "HEAD"))
+	}
+	for _, r := range resultsHEAD {
+		<-r.Ready
+		if r.OK {
+			cancel()
+			cacheSet(domain, r.Proxy.URL)
+			log.Printf("Selected proxy %s for domain %s via HEAD", r.Proxy.URL, domain)
 			return
 		}
 	}
