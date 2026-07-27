@@ -175,6 +175,8 @@ cache:
   maxAge: 240h
   saveTime: 5m
   cleanupInterval: 12h
+  recheckLimit: 1
+  recheckWindowSeconds: 60
 ```
 
 Meaning:
@@ -183,6 +185,8 @@ Meaning:
 - `maxAge` — how long will a cache entry be stored before being deleted after its last use
 - `saveTime` — interval for saving cache to disk
 - `cleanupInterval` — interval for removing expired entries
+- `recheckLimit` — maximum total rechecks for a main domain and all its subdomains during a rate-limit window
+- `recheckWindowSeconds` — recheck rate-limit window in seconds
 
 ## DPI Detection Logic
 

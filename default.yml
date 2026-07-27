@@ -39,5 +39,7 @@ cache:
   maxAge: 240h
   saveTime: 5m
   cleanupInterval: 12h
+  recheckLimit: 2
+  recheckWindowSeconds: 20
 
 userAgent: "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0"

@@ -22,6 +22,8 @@ var (
 	userCache  = make(map[string]string)
 	cacheMu    sync.RWMutex
 	inProgress sync.Map // key: domain, value: chan struct{}
+	recheckMu  sync.Mutex
+	rechecks   = make(map[string][]time.Time) // main domain -> recent recheck starts
 	certPool   *x509.CertPool
 	cfg        Config
 )

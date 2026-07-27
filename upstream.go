@@ -473,7 +473,71 @@ func runCheck(domain string, proxies []*Proxy) chan struct{} {
 	return ch
 }
 
+func waitForRecheckSlot(domain string) {
+	limit := cfg.Cache.RecheckLimit
+	window := time.Duration(cfg.Cache.RecheckWindowSeconds) * time.Second
+	key := mainDomain(domain)
+
+	for {
+		now := time.Now()
+		cutoff := now.Add(-window)
+
+		recheckMu.Lock()
+		starts := rechecks[key]
+		firstActive := 0
+		for firstActive < len(starts) && !starts[firstActive].After(cutoff) {
+			firstActive++
+		}
+		starts = starts[firstActive:]
+
+		if len(starts) < limit {
+			rechecks[key] = append(starts, now)
+			recheckMu.Unlock()
+			return
+		}
+
+		wait := starts[0].Add(window).Sub(now)
+		rechecks[key] = starts
+		recheckMu.Unlock()
+
+		if wait > 0 {
+			time.Sleep(wait)
+		}
+	}
+}
+
+func scheduleRecheckCleanup(domain string) {
+	window := time.Duration(cfg.Cache.RecheckWindowSeconds) * time.Second
+	key := mainDomain(domain)
+
+	time.AfterFunc(window, func() {
+		cutoff := time.Now().Add(-window)
+
+		recheckMu.Lock()
+		defer recheckMu.Unlock()
+
+		starts := rechecks[key]
+		firstActive := 0
+		for firstActive < len(starts) && !starts[firstActive].After(cutoff) {
+			firstActive++
+		}
+
+		if firstActive == len(starts) {
+			delete(rechecks, key)
+			return
+		}
+		rechecks[key] = starts[firstActive:]
+	})
+}
+
 func runCheckSubdomain(domain string, proxy string, proxies []*Proxy) {
+	waitForRecheckSlot(domain)
+	defer scheduleRecheckCleanup(domain)
+
+	if res := cacheGet(domain); res.Found && !res.Expired {
+		return
+	}
+
 	proxies = filterProxies(domain, proxies, true)
 	for i, p := range proxies {
 		if p.URL == proxy && i != len(proxies)-1 {

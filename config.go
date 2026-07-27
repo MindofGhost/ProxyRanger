@@ -73,10 +73,12 @@ type UploadProbe struct {
 }
 
 type Cache struct {
-	TTL             time.Duration `yaml:"ttl"`
-	MaxAge          time.Duration `yaml:"maxAge"`
-	SaveTime        time.Duration `yaml:"saveTime"`
-	CleanupInterval time.Duration `yaml:"cleanupInterval"`
+	TTL                  time.Duration `yaml:"ttl"`
+	MaxAge               time.Duration `yaml:"maxAge"`
+	SaveTime             time.Duration `yaml:"saveTime"`
+	CleanupInterval      time.Duration `yaml:"cleanupInterval"`
+	RecheckLimit         int           `yaml:"recheckLimit"`
+	RecheckWindowSeconds int           `yaml:"recheckWindowSeconds"`
 }
 
 // ---------------- LOAD ----------------
@@ -151,6 +153,12 @@ func validateConfig(c *Config) error {
 
 	if c.DPI.RetryAttempts < 0 {
 		return fmt.Errorf("dpi.retryAttempts must be >= 0")
+	}
+	if c.Cache.RecheckLimit <= 0 {
+		return fmt.Errorf("cache.recheckLimit must be > 0")
+	}
+	if c.Cache.RecheckWindowSeconds <= 0 {
+		return fmt.Errorf("cache.recheckWindowSeconds must be > 0")
 	}
 
 	return nil
