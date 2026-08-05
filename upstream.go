@@ -134,7 +134,7 @@ func makeRequest(client *http.Client, req *http.Request, proxyURL *url.URL, targ
 
 	res.Status = resp.StatusCode
 
-	if resp.StatusCode >= 400 && resp.StatusCode != 404 && resp.StatusCode != 418 {
+	if resp.StatusCode >= 400 && resp.StatusCode != 404 && resp.StatusCode != 405 && resp.StatusCode != 418 {
 		log.Printf("%s Proxy %s returned bad status %d for %s", method, proxyURL, resp.StatusCode, target)
 		return res
 	}
