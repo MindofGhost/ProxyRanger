@@ -175,8 +175,6 @@ cache:
   maxAge: 240h
   saveTime: 5m
   cleanupInterval: 12h
-  recheckLimit: 1
-  recheckWindowSeconds: 60
 ```
 
 Meaning:
@@ -185,8 +183,6 @@ Meaning:
 - `maxAge` — how long will a cache entry be stored before being deleted after its last use
 - `saveTime` — interval for saving cache to disk
 - `cleanupInterval` — interval for removing expired entries
-- `recheckLimit` — maximum total rechecks for a main domain and all its subdomains during a rate-limit window
-- `recheckWindowSeconds` — recheck rate-limit window in seconds
 
 ## DPI Detection Logic
 
@@ -210,6 +206,8 @@ dpi:
 
   retryAttempts: 1
   usePUTinRechecks: false
+  recheckLimit: 1
+  recheckWindowSeconds: 60
 ```
 
 Meaning:
@@ -219,6 +217,10 @@ Meaning:
 - `delayMS` — delay between chunks
 - `retryAttempts` — number of repeated validation attempts
 - `usePUTinRechecks` — whether PUT probing is used during cache revalidation
+
+> Rate-limit settings to help avoid website anti-DDoS protection:
+- `recheckLimit` — maximum total rechecks for a main domain and all its subdomains during a rate-limit window
+- `recheckWindowSeconds` — recheck rate-limit window in seconds
 
 
 ## Current limitations

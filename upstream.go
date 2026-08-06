@@ -474,8 +474,8 @@ func runCheck(domain string, proxies []*Proxy) chan struct{} {
 }
 
 func waitForRecheckSlot(domain string) {
-	limit := cfg.Cache.RecheckLimit
-	window := time.Duration(cfg.Cache.RecheckWindowSeconds) * time.Second
+	limit := cfg.DPI.RecheckLimit
+	window := time.Duration(cfg.DPI.RecheckWindowSeconds) * time.Second
 	key := mainDomain(domain)
 
 	for {
@@ -507,7 +507,7 @@ func waitForRecheckSlot(domain string) {
 }
 
 func scheduleRecheckCleanup(domain string) {
-	window := time.Duration(cfg.Cache.RecheckWindowSeconds) * time.Second
+	window := time.Duration(cfg.DPI.RecheckWindowSeconds) * time.Second
 	key := mainDomain(domain)
 
 	time.AfterFunc(window, func() {
