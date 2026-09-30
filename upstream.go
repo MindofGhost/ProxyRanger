@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -47,64 +49,134 @@ type CheckResult struct {
 
 func dpiUploadProbe(
 	ctx context.Context,
-	client *http.Client,
-	url string,
-	host string,
+	proxyURL *url.URL,
+	target string,
 	bytesTotal int,
 	bytesPerChunk int,
 	delay time.Duration,
-) error {
-
-	pr, pw := io.Pipe()
-
-	req, err := http.NewRequestWithContext(ctx, "PUT", url, pr)
-	if err != nil {
-		return err
-	}
-
-	req.Host = host
-	req.Header.Set("User-Agent", cfg.UserAgent)
-	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("Content-Type", "application/octet-stream")
-	// req.Header.Set("Expect", "100-continue")
-	req.ContentLength = int64(bytesTotal)
-
-	go func() {
-		defer pw.Close()
-
-		buf := make([]byte, bytesPerChunk)
-		sent := 0
-
-		for sent < bytesTotal {
+) (err error) {
+	bytesWritten := 0
+	readErrors := make(chan error, 1)
+	var tcpConn net.Conn
+	defer func() {
+		// Preserve the failure before closing the connection ourselves.
+		if err != nil {
 			select {
-			case <-ctx.Done():
-				return
+			case cause := <-readErrors:
+				err = cause
 			default:
 			}
-
-			if _, err := rand.Read(buf); err != nil {
-				pw.CloseWithError(err)
-				return
+			if ctx.Err() != nil {
+				err = ctx.Err()
 			}
-
-			n, err := pw.Write(buf)
-			if err != nil {
-				return
-			}
-
-			sent += n
-			time.Sleep(delay)
+			err = fmt.Errorf("upload probe wrote %d/%d bytes: %w", bytesWritten, bytesTotal, err)
+		}
+		if tcpConn != nil {
+			tcpConn.Close()
 		}
 	}()
 
-	resp, err := client.Do(req)
+	// Connect to the proxy and open a tunnel to the site.
+	req, err := http.NewRequestWithContext(ctx, "PUT", "https://"+target, nil)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	targetPort := req.URL.Port()
+	if targetPort == "" {
+		targetPort = "443"
+	}
+	address := net.JoinHostPort(req.URL.Hostname(), targetPort)
+	dialer := net.Dialer{Timeout: time.Duration(cfg.Timeouts.CheckProxy.DialContext) * time.Millisecond}
+	tcpConn, err = dialer.DialContext(ctx, "tcp", proxyURL.Host)
+	if err != nil {
+		return err
+	}
+	// Closing the raw connection also interrupts a blocked TLS read or write.
+	stop := context.AfterFunc(ctx, func() { tcpConn.Close() })
+	defer stop()
 
-	io.CopyN(io.Discard, resp.Body, 512)
+	connectReq := &http.Request{
+		Method: "CONNECT",
+		URL:    &url.URL{Opaque: address},
+		Host:   address,
+	}
+	if err := connectReq.Write(tcpConn); err != nil {
+		return err
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tcpConn), connectReq)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("proxy CONNECT returned %s", resp.Status)
+	}
 
+	// Establish TLS inside the tunnel.
+	tlsConn := tls.Client(tcpConn, &tls.Config{
+		RootCAs: certPool, ServerName: req.URL.Hostname(),
+		NextProtos: []string{"http/1.1"},
+	})
+	handshakeCtx := ctx
+	if timeout := cfg.Timeouts.CheckProxy.TLSHandshakeTimeout; timeout > 0 {
+		var cancel context.CancelFunc
+		handshakeCtx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Millisecond)
+		defer cancel()
+	}
+	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+		return err
+	}
+
+	// Read responses in parallel; only EOF or a read error stops the upload.
+	go func() {
+		_, err := io.Copy(io.Discard, tlsConn)
+		if err == nil {
+			err = io.EOF
+		}
+		readErrors <- err
+		tcpConn.Close()
+	}()
+
+	// Send the HTTP headers without handing body transmission to http.Client.
+	req.Header.Set("User-Agent", cfg.UserAgent)
+	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Content-Length", fmt.Sprint(bytesTotal))
+	req.Header.Set("Connection", "close")
+	var headers strings.Builder
+	fmt.Fprintf(&headers, "PUT %s HTTP/1.1\r\nHost: %s\r\n", req.URL.RequestURI(), req.URL.Host)
+	req.Header.Write(&headers)
+	headers.WriteString("\r\n")
+	if _, err := io.WriteString(tlsConn, headers.String()); err != nil {
+		return err
+	}
+
+	// Write exactly bytesTotal bytes, pausing only between chunks.
+	buf := make([]byte, min(bytesPerChunk, bytesTotal))
+	for bytesWritten < bytesTotal {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-readErrors:
+			return err
+		default:
+		}
+		chunk := buf[:min(len(buf), bytesTotal-bytesWritten)]
+		rand.Read(chunk)
+		n, err := tlsConn.Write(chunk)
+		bytesWritten += n
+		if err != nil {
+			return err
+		}
+		if bytesWritten < bytesTotal && delay > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case err := <-readErrors:
+				return err
+			case <-time.After(delay):
+			}
+		}
+	}
 	return nil
 }
 
@@ -183,6 +255,36 @@ func makeRequest(client *http.Client, req *http.Request, proxyURL *url.URL, targ
 
 // Проверка доступности прокси через target
 func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method string) CheckResult {
+	if method == "PUT" {
+		ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeouts.CheckProxy.Timeout)*time.Millisecond)
+		defer cancel()
+
+		start := time.Now()
+		err := dpiUploadProbe(
+			ctx,
+			proxyURL,
+			target,
+			cfg.DPI.UploadProbe.TotalSizeBytes,
+			cfg.DPI.UploadProbe.ChunkSizeBytes,
+			time.Duration(cfg.DPI.UploadProbe.DelayMS)*time.Millisecond,
+		)
+
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
+				return CheckResult{OK: true}
+			}
+
+			if strings.Contains(err.Error(), "use of closed network connection") {
+				return CheckResult{OK: true}
+			}
+			log.Printf("PUT Remove proxy %s from check for %s. Returned error: %s. DPI or site restrictions?", proxyURL, target, err)
+			return CheckResult{}
+		}
+
+		log.Printf("PUT Proxy %s wrote %d bytes to %s in %s", proxyURL, cfg.DPI.UploadProbe.TotalSizeBytes, target, time.Since(start))
+		return CheckResult{OK: true}
+	}
+
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		panic(err)
@@ -204,35 +306,6 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 			},
 		},
 		Timeout: time.Duration(cfg.Timeouts.CheckProxy.Timeout) * time.Millisecond,
-	}
-
-	if method == "PUT" {
-		ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.Timeouts.CheckProxy.Timeout)*time.Millisecond)
-		defer cancel()
-
-		err := dpiUploadProbe(
-			ctx,
-			client,
-			"https://"+target,
-			target,
-			cfg.DPI.UploadProbe.TotalSizeBytes,
-			cfg.DPI.UploadProbe.ChunkSizeBytes,
-			time.Duration(cfg.DPI.UploadProbe.DelayMS)*time.Millisecond,
-		)
-
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
-				return CheckResult{OK: true}
-			}
-
-			if strings.Contains(err.Error(), "use of closed network connection") {
-				return CheckResult{OK: true}
-			}
-			log.Printf("PUT Remove proxy %s from check for %s. Returned error: %s. DPI or site restrictions?", proxyURL, target, err)
-			return CheckResult{}
-		}
-
-		return CheckResult{OK: true}
 	}
 
 	baseReq, err := http.NewRequestWithContext(ctx, method, "https://"+target, nil)
