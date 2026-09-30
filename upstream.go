@@ -126,9 +126,26 @@ func dpiUploadProbe(
 		return err
 	}
 
-	// Read responses in parallel; only EOF or a read error stops the upload.
+	// Recognize a final HTTP response, but keep sending after an early reply.
+	responseReady := make(chan struct{})
 	go func() {
-		_, err := io.Copy(io.Discard, tlsConn)
+		reader := bufio.NewReader(tlsConn)
+		var err error
+		for {
+			var resp *http.Response
+			resp, err = http.ReadResponse(reader, req)
+			if err != nil {
+				break
+			}
+			if resp.StatusCode >= 200 {
+				close(responseReady)
+				// Read the raw stream so an empty early response does not
+				// close the connection while the upload is still running.
+				_, err = io.Copy(io.Discard, reader)
+				break
+			}
+			resp.Body.Close()
+		}
 		if err == nil {
 			err = io.EOF
 		}
@@ -177,7 +194,35 @@ func dpiUploadProbe(
 			}
 		}
 	}
-	return nil
+	// Writes can finish in local/proxy buffers even when the site is stalled.
+	// Require an HTTP response too; bound the wait by both configured timeouts.
+	var responseTimeout <-chan time.Time
+	if timeout := cfg.Timeouts.CheckProxy.ResponseHeaderTimeout; timeout > 0 {
+		responseTimeout = time.After(time.Duration(timeout) * time.Millisecond)
+	}
+	select {
+	case <-responseReady:
+	case err = <-readErrors:
+	case <-ctx.Done():
+		err = ctx.Err()
+	case <-responseTimeout:
+		err = fmt.Errorf("waiting for HTTP response: %w", context.DeadlineExceeded)
+	}
+	if err == nil {
+		select {
+		case err = <-readErrors:
+		default:
+		}
+	}
+	// A clean close is valid after the full upload and a complete response header.
+	if errors.Is(err, io.EOF) {
+		select {
+		case <-responseReady:
+			err = nil
+		default:
+		}
+	}
+	return err
 }
 
 func makeRequest(client *http.Client, req *http.Request, proxyURL *url.URL, target, method string) CheckResult {
