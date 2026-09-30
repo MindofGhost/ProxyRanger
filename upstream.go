@@ -54,8 +54,7 @@ func dpiUploadProbe(
 	bytesTotal int,
 	bytesPerChunk int,
 	delay time.Duration,
-) (err error) {
-	bytesWritten := 0
+) (bytesWritten int, err error) {
 	readErrors := make(chan error, 1)
 	var tcpConn net.Conn
 	defer func() {
@@ -79,7 +78,7 @@ func dpiUploadProbe(
 	// Connect to the proxy and open a tunnel to the site.
 	req, err := http.NewRequestWithContext(ctx, "PUT", "https://"+target, nil)
 	if err != nil {
-		return err
+		return bytesWritten, err
 	}
 	targetPort := req.URL.Port()
 	if targetPort == "" {
@@ -89,7 +88,7 @@ func dpiUploadProbe(
 	dialer := net.Dialer{Timeout: time.Duration(cfg.Timeouts.CheckProxy.DialContext) * time.Millisecond}
 	tcpConn, err = dialer.DialContext(ctx, "tcp", proxyURL.Host)
 	if err != nil {
-		return err
+		return bytesWritten, err
 	}
 	// Closing the raw connection also interrupts a blocked TLS read or write.
 	stop := context.AfterFunc(ctx, func() { tcpConn.Close() })
@@ -101,14 +100,14 @@ func dpiUploadProbe(
 		Host:   address,
 	}
 	if err := connectReq.Write(tcpConn); err != nil {
-		return err
+		return bytesWritten, err
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(tcpConn), connectReq)
 	if err != nil {
-		return err
+		return bytesWritten, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("proxy CONNECT returned %s", resp.Status)
+		return bytesWritten, fmt.Errorf("proxy CONNECT returned %s", resp.Status)
 	}
 
 	// Establish TLS inside the tunnel.
@@ -123,7 +122,7 @@ func dpiUploadProbe(
 		defer cancel()
 	}
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
-		return err
+		return bytesWritten, err
 	}
 
 	// Recognize a final HTTP response, but keep sending after an early reply.
@@ -164,7 +163,7 @@ func dpiUploadProbe(
 	req.Header.Write(&headers)
 	headers.WriteString("\r\n")
 	if _, err := io.WriteString(tlsConn, headers.String()); err != nil {
-		return err
+		return bytesWritten, err
 	}
 
 	// Write exactly bytesTotal bytes, pausing only between chunks.
@@ -172,9 +171,9 @@ func dpiUploadProbe(
 	for bytesWritten < bytesTotal {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return bytesWritten, ctx.Err()
 		case err := <-readErrors:
-			return err
+			return bytesWritten, err
 		default:
 		}
 		chunk := buf[:min(len(buf), bytesTotal-bytesWritten)]
@@ -182,14 +181,14 @@ func dpiUploadProbe(
 		n, err := tlsConn.Write(chunk)
 		bytesWritten += n
 		if err != nil {
-			return err
+			return bytesWritten, err
 		}
 		if bytesWritten < bytesTotal && delay > 0 {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return bytesWritten, ctx.Err()
 			case err := <-readErrors:
-				return err
+				return bytesWritten, err
 			case <-time.After(delay):
 			}
 		}
@@ -222,7 +221,7 @@ func dpiUploadProbe(
 		default:
 		}
 	}
-	return err
+	return bytesWritten, err
 }
 
 func makeRequest(client *http.Client, req *http.Request, proxyURL *url.URL, target, method string) CheckResult {
@@ -305,7 +304,7 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 		defer cancel()
 
 		start := time.Now()
-		err := dpiUploadProbe(
+		bytesWritten, err := dpiUploadProbe(
 			ctx,
 			proxyURL,
 			target,
@@ -316,18 +315,18 @@ func checkProxy(ctx context.Context, proxyURL *url.URL, target string, method st
 
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
-				return CheckResult{OK: true}
+				return CheckResult{OK: true, Bytes: int64(bytesWritten)}
 			}
 
 			if strings.Contains(err.Error(), "use of closed network connection") {
-				return CheckResult{OK: true}
+				return CheckResult{OK: true, Bytes: int64(bytesWritten)}
 			}
 			log.Printf("PUT Remove proxy %s from check for %s. Returned error: %s. DPI or site restrictions?", proxyURL, target, err)
-			return CheckResult{}
+			return CheckResult{Bytes: int64(bytesWritten)}
 		}
 
-		log.Printf("PUT Proxy %s wrote %d bytes to %s in %s", proxyURL, cfg.DPI.UploadProbe.TotalSizeBytes, target, time.Since(start))
-		return CheckResult{OK: true}
+		log.Printf("PUT Proxy %s wrote %d bytes to %s in %s", proxyURL, bytesWritten, target, time.Since(start))
+		return CheckResult{OK: true, Bytes: int64(bytesWritten)}
 	}
 
 	jar, err := cookiejar.New(nil)
@@ -672,15 +671,15 @@ func runCheckSubdomain(domain string, proxy string, proxies []*Proxy) {
 // Функция проверки домена
 func checkDomain(domain string, proxies []*Proxy) {
 	resultsHEAD := make([]*ProxyResult, 0, len(proxies))
-	results := make([]*ProxyResult, 0, len(proxies))
+	resultsPUT := make([]*ProxyResult, 0, len(proxies))
 	resultsGET := make([]*ProxyResult, 0, len(proxies))
 	// ctx := context.WithoutCancel(context.Background())
 	// if cfg.DPI.UsePUTinRechecks || len(proxies) > 1 {
 	// 	log.Printf("Start PUT check for domain %s", domain)
 	// 	for _, proxy := range proxies {
-	// 		results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
+	// 		resultsPUT = append(resultsPUT, checkProxyAsync(ctx, proxy, domain, "PUT"))
 	// 	}
-	// 	for _, r := range results {
+	// 	for _, r := range resultsPUT {
 	// 		<-r.Ready
 	// 		if r.OK {
 	// 			localProxies = append(localProxies, r.Proxy)
@@ -762,9 +761,11 @@ func checkDomain(domain string, proxies []*Proxy) {
 		}
 		log.Printf("Start PUT check for domain %s", domain)
 		for _, proxy := range uniqueProxies {
-			results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
+			resultsPUT = append(resultsPUT, checkProxyAsync(ctx, proxy, domain, "PUT"))
 		}
-		for _, r := range results {
+		var resultWithBytesPUT *ProxyResult
+		resultWithBytesPUTсount := 0
+		for _, r := range resultsPUT {
 			<-r.Ready
 			if r.OK {
 				cancel()
@@ -772,6 +773,15 @@ func checkDomain(domain string, proxies []*Proxy) {
 				log.Printf("Selected proxy %s for domain %s via PUT", r.Proxy.URL, domain)
 				return
 			}
+			if r.Bytes > 0 {
+				resultWithBytesPUT = r
+				resultWithBytesPUTсount++
+			}
+		}
+		if resultWithBytesPUTсount == 1 {
+			cacheSet(domain, resultWithBytesPUT.Proxy.URL)
+			log.Printf("Selected proxy %s for domain %s as the only PUT proxy with written bytes (%d)", resultWithBytesPUT.Proxy.URL, domain, resultWithBytesPUT.Bytes)
+			return
 		}
 	}
 
