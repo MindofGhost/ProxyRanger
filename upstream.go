@@ -757,6 +757,9 @@ func checkDomain(domain string, proxies []*Proxy) {
 
 	}
 	if cfg.DPI.UsePUTinRechecks || len(proxies) > 1 {
+		if len(uniqueProxies) == 0 {
+			uniqueProxies = proxies
+		}
 		log.Printf("Start PUT check for domain %s", domain)
 		for _, proxy := range uniqueProxies {
 			results = append(results, checkProxyAsync(ctx, proxy, domain, "PUT"))
